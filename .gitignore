@@ -1,6 +1,9 @@
 # Maven build output
 /target/
 
+# Node (semantic-release tooling)
+node_modules/
+
 # Compiled class files
 *.class
 
