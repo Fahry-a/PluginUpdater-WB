@@ -170,6 +170,16 @@ Non-OP players can also be granted access by adding their username to `allowed-p
 
 ---
 
+## 🚀 Auto Release
+
+Releases are fully automated by [semantic-release](https://github.com/semantic-release/semantic-release) running in [`.github/workflows/release.yml`](.github/workflows/release.yml) on every push to `main` (after `mvn test` passes).
+
+- Write commits in [Conventional Commits](https://www.conventionalcommits.org/) style: `fix:` → patch, `feat:` → minor, `feat!:`/`BREAKING CHANGE:` → major. `chore:`, `docs:`, `test:` etc. trigger no release.
+- The bot tags pure semver (`v1.0.6`), bumps `pom.xml`/`README.md` to `26.3-1.0.6` (Minecraft prefix is kept), rebuilds the jar, attaches it to the GitHub Release, updates `CHANGELOG.md`, and commits everything back as `chore(release): … [skip ci]`.
+- Requirements: the workflow's `GITHUB_TOKEN` must be allowed to push to `main` (repo Settings → Actions → General → Workflow permissions: Read and write). If `main` is branch-protected against the bot, use a `RELEASE_PAT` secret instead.
+
+---
+
 ## 🆘 Support
 
 - **Issues & bug reports:** Open an issue on the project repository
