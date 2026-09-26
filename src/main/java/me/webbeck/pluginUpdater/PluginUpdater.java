@@ -1,10 +1,12 @@
-﻿package me.webbeck.pluginUpdater;
+package me.webbeck.pluginUpdater;
 
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
+import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -12,17 +14,25 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.File;
+import java.io.IOException;
 import java.net.http.HttpClient;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class PluginUpdater extends JavaPlugin implements Listener {
     private HttpClient httpClient;
+    private IoExecutors ioExecutors;
     private final Map<String, UpdateInfo> pendingUpdates = new ConcurrentHashMap<>();
+    private final Map<String, UpdateInfo> unfilteredUpdates = new ConcurrentHashMap<>();
+    private final Map<String, CheckError> checkErrors = new ConcurrentHashMap<>();
     private volatile boolean initialCheckComplete = false;
 
-    // Holds the plugin name awaiting destructive confirmation (e.g. delete)
-    private String pendingDeletionPlugin = null;
+    // Holds plugin names awaiting destructive confirmation, keyed by sender name.
+    private final Map<String, PendingDeletion> pendingDeletions = new ConcurrentHashMap<>();
+    private final Object deletionLock = new Object();
+
+    private File pluginsFile;
+    private YamlConfiguration pluginsConfig;
 
     private ConfigManager configManager;
     private UpdateChecker updateChecker;
@@ -35,13 +45,18 @@ public class PluginUpdater extends JavaPlugin implements Listener {
         httpClient = HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.ALWAYS)
                 .build();
+        ioExecutors = new IoExecutors();
 
         saveDefaultConfig();
+        getConfig().options().header("PluginUpdater-WB settings.\nEdit while the server is stopped, then run /upd reload (or restart).");
+        initPluginsConfig();
 
         configManager = new ConfigManager(this);
         updateChecker = new UpdateChecker(this, configManager, httpClient);
         updateDownloader = new UpdateDownloader(this, updateChecker, configManager);
-        geyserManager = new GeyserManager(this, httpClient);
+        SourceRegistry registry = new SourceRegistry(updateChecker);
+        updateChecker.setRegistry(registry);
+        geyserManager = new GeyserManager(this, httpClient, updateChecker);
         commandHandler = new CommandHandler(this, configManager, updateChecker, updateDownloader, geyserManager);
 
         getCommand("updater").setExecutor(commandHandler);
@@ -66,14 +81,58 @@ public class PluginUpdater extends JavaPlugin implements Listener {
     public void onDisable() {
         // Attempt to process any pending deletions during disable
         processPendingDeletions();
+        if (ioExecutors != null) ioExecutors.shutdown();
     }
 
     public HttpClient getHttpClient() {
         return httpClient;
     }
 
+    public IoExecutors getIoExecutors() {
+        return ioExecutors;
+    }
+
+    /** For unit tests that construct managers without onEnable. */
+    void setIoExecutors(IoExecutors executors) {
+        this.ioExecutors = executors;
+    }
+
     public Map<String, UpdateInfo> getPendingUpdates() {
         return pendingUpdates;
+    }
+
+    public Map<String, UpdateInfo> getUnfilteredUpdates() {
+        return unfilteredUpdates;
+    }
+
+    public Map<String, CheckError> getCheckErrors() {
+        return checkErrors;
+    }
+
+    /**
+     * Resolves the staging folder the same way Paper does: {@code settings.update-folder}
+     * from bukkit.yml, relative to the plugins directory. Defaults to {@code update}.
+     */
+    public File getUpdateFolder() {
+        return new File(getDataFolder().getParentFile(), resolveUpdateFolderName());
+    }
+
+    private String resolveUpdateFolderName() {
+        try {
+            File pluginsDir = getDataFolder().getParentFile();
+            File serverRoot = pluginsDir != null ? pluginsDir.getParentFile() : null;
+            if (serverRoot != null) {
+                File bukkitYml = new File(serverRoot, "bukkit.yml");
+                if (bukkitYml.isFile()) {
+                    String name = org.bukkit.configuration.file.YamlConfiguration
+                            .loadConfiguration(bukkitYml).getString("settings.update-folder", "update");
+                    if (name != null && !name.isBlank()) return name.trim();
+                }
+            }
+        } catch (Exception e) {
+            getLogger().warning("Failed to read update-folder from bukkit.yml, using 'update': " + e.getMessage());
+        }
+        return "update";
     }
 
     public UpdateChecker getUpdateChecker() {
@@ -138,71 +197,142 @@ public class PluginUpdater extends JavaPlugin implements Listener {
         this.initialCheckComplete = true;
     }
 
-    public String getPendingDeletionPlugin() {
-        return pendingDeletionPlugin;
+    public static final class PendingDeletion {
+        public final String pluginName;
+        public final long createdAt;
+
+        PendingDeletion(String pluginName) {
+            this.pluginName = pluginName;
+            this.createdAt = System.currentTimeMillis();
+        }
+
+        boolean expired() {
+            return System.currentTimeMillis() - createdAt > 60_000;
+        }
     }
 
-    public void setPendingDeletionPlugin(String pendingDeletionPlugin) {
-        this.pendingDeletionPlugin = pendingDeletionPlugin;
+    public void setPendingDeletion(org.bukkit.command.CommandSender sender, String pluginName) {
+        pendingDeletions.put(sender.getName(), new PendingDeletion(pluginName));
+    }
+
+    public String consumePendingDeletion(org.bukkit.command.CommandSender sender) {
+        PendingDeletion pending = pendingDeletions.remove(sender.getName());
+        if (pending == null || pending.expired()) return null;
+        return pending.pluginName;
+    }
+
+    public YamlConfiguration getPluginsConfig() {
+        return pluginsConfig;
+    }
+
+    public void savePluginsConfig() {
+        try {
+            pluginsConfig.save(pluginsFile);
+        } catch (IOException e) {
+            getLogger().warning("Failed to save plugins.yml: " + e.getMessage());
+        }
+    }
+
+    public void reloadPluginsConfig() {
+        pluginsConfig = YamlConfiguration.loadConfiguration(pluginsFile);
+        pluginsConfig.options().header(PLUGINS_HEADER);
+    }
+
+    private static final String PLUGINS_HEADER = "Auto-generated by PluginUpdater-WB.\n"
+            + "Per-plugin tracking state - safe to edit while the server is stopped.\n"
+            + "Entries marked installed: false belong to plugins not currently on the server.";
+
+    /**
+     * Per-plugin tracking state lives in plugins.yml, separate from config.yml settings.
+     * Migrates the legacy config.yml "plugins:" section once, then leaves config.yml alone.
+     */
+    private void initPluginsConfig() {
+        pluginsFile = new File(getDataFolder(), "plugins.yml");
+        if (!pluginsFile.exists()) {
+            pluginsConfig = new YamlConfiguration();
+            pluginsConfig.options().header(PLUGINS_HEADER);
+            ConfigurationSection legacy = getConfig().getConfigurationSection("plugins");
+            if (legacy != null) {
+                for (String key : legacy.getKeys(false)) {
+                    ConfigurationSection sub = legacy.getConfigurationSection(key);
+                    if (sub == null) continue;
+                    ConfigurationSection dest = pluginsConfig.createSection(key);
+                    for (Map.Entry<String, Object> value : sub.getValues(false).entrySet()) {
+                        dest.set(value.getKey(), value.getValue());
+                    }
+                }
+            }
+            savePluginsConfig();
+            getConfig().set("plugins", null);
+            saveConfig();
+        } else {
+            reloadPluginsConfig();
+        }
+    }
+
+    public void appendPendingDeletion(String entry) {
+        synchronized (deletionLock) {
+            try {
+                File pendingFile = new File(getDataFolder(), "pending-deletions.txt");
+                java.nio.file.Files.writeString(pendingFile.toPath(), entry + System.lineSeparator(),
+                        java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
+            } catch (Exception e) {
+                getLogger().warning("Failed to schedule deletion entry '" + entry + "': " + e.getMessage());
+            }
+        }
     }
 
     private void processPendingDeletions() {
         File pendingFile = new File(getDataFolder(), "pending-deletions.txt");
         if (!pendingFile.exists()) return;
 
+        synchronized (deletionLock) {
         File pluginsFolder = getDataFolder().getParentFile();
         java.util.List<String> remaining = new java.util.ArrayList<>();
         try {
             java.util.List<String> lines = java.nio.file.Files.readAllLines(pendingFile.toPath());
             for (String line : lines) {
                 String entry = line == null ? "" : line.trim();
+                if (entry.startsWith("plugin:")) {
+                    disableExactPlugin(entry.substring(7));
+                }
+            }
+            for (String line : lines) {
+                String entry = line == null ? "" : line.trim();
                 if (entry.isEmpty()) continue;
+                if (entry.startsWith("plugin:")) continue;
                 boolean success = false;
                 try {
                     if (entry.startsWith("jar:")) {
                         String name = entry.substring(4);
                         File target = new File(pluginsFolder, name);
                         if (target.exists()) {
-                            // Try to disable matching loaded plugin first
-                            tryDisableLoadedPlugin(name);
+                            disableExactPlugin(stripJarSuffix(name));
                             
-                            // Attempt direct deletion with retries
                             success = attemptDeletion(target, 3);
                             
                             if (success) {
                                 getLogger().info("Deleted scheduled plugin jar: " + name);
                             } else {
                                 getLogger().warning("Could not delete jar (queued for JVM shutdown): " + name);
-                                // Queue as final fallback
                                 target.deleteOnExit();
-                                success = true; // Consider this successful since we queued it
+                                success = true;
                             }
                         } else {
                             getLogger().info("Scheduled jar not found: " + name);
-                            success = true; // nothing to do
+                            success = true;
                         }
                     } else if (entry.startsWith("dir:")) {
                         String dirName = entry.substring(4);
                         File targetDir = new File(pluginsFolder, dirName);
                         if (targetDir.exists()) {
-                            try {
-                                java.nio.file.Files.walk(targetDir.toPath())
-                                        .sorted(java.util.Comparator.reverseOrder())
-                                        .forEach(p -> {
-                                            try { java.nio.file.Files.deleteIfExists(p); } catch (Exception ignored) {}
-                                        });
-                                getLogger().info("Deleted scheduled plugin data folder: " + dirName);
-                                success = true;
-                            } catch (Exception e) {
-                                getLogger().warning("Failed to delete folder " + dirName + ": " + e.getMessage());
-                                success = false;
-                            }
+                            // Recoverable: move data folder aside instead of recursive delete.
+                            success = archiveDataFolder(targetDir, dirName);
                         } else {
                             getLogger().info("Scheduled plugin data folder not found: " + dirName);
                             success = true;
                         }
                     } else {
-                        // legacy: plain filename
                         File target = new File(pluginsFolder, entry);
                         if (target.exists()) {
                             success = attemptDeletion(target, 3);
@@ -233,18 +363,39 @@ public class PluginUpdater extends JavaPlugin implements Listener {
             if (remaining.isEmpty()) java.nio.file.Files.deleteIfExists(pendingFile.toPath());
             else java.nio.file.Files.write(pendingFile.toPath(), remaining);
         } catch (Exception ignored) {}
+        }
     }
 
-    private void tryDisableLoadedPlugin(String jarName) {
-        String lowerName = jarName.toLowerCase().replaceAll("\\.jar$", "");
+    /** Moves a plugin data folder to deleted-backups/ so a mistaken confirm is recoverable. */
+    private boolean archiveDataFolder(File targetDir, String dirName) {
+        try {
+            File archiveRoot = new File(getDataFolder(), "deleted-backups");
+            if (!archiveRoot.exists()) archiveRoot.mkdirs();
+            String safe = dirName.replaceAll("[^A-Za-z0-9._-]", "_");
+            File dest = new File(archiveRoot, safe + "-" + System.currentTimeMillis());
+            java.nio.file.Files.move(targetDir.toPath(), dest.toPath());
+            getLogger().info("Archived plugin data folder " + dirName + " to " + dest.getName() + " (recoverable).");
+            return true;
+        } catch (Exception e) {
+            getLogger().warning("Failed to archive folder " + dirName + ": " + e.getMessage());
+            return false;
+        }
+    }
+
+    private String stripJarSuffix(String jarName) {
+        String lower = jarName.toLowerCase();
+        return lower.endsWith(".jar") ? jarName.substring(0, jarName.length() - 4) : jarName;
+    }
+
+    private void disableExactPlugin(String pluginName) {
+        if (pluginName == null || pluginName.isBlank()) return;
+        String wanted = pluginName.trim();
         for (org.bukkit.plugin.Plugin p : Bukkit.getPluginManager().getPlugins()) {
-            if (p == null) continue;
-            String pName = p.getName() == null ? "" : p.getName().toLowerCase();
-            if (lowerName.contains(pName) || pName.contains(lowerName)) {
+            if (p == null || p.getName() == null) continue;
+            if (p.getName().equalsIgnoreCase(wanted)) {
                 try {
-                    getLogger().info("Attempting to disable plugin before deletion: " + p.getName());
+                    getLogger().info("Disabling plugin before scheduled deletion: " + p.getName());
                     Bukkit.getPluginManager().disablePlugin(p);
-                    System.gc(); // Force garbage collection to release classloader
                 } catch (Exception ignored) {}
                 break;
             }
@@ -271,32 +422,42 @@ public class PluginUpdater extends JavaPlugin implements Listener {
     }
 
     private void performFinalDeletions() {
-        File pendingFile = new File(getDataFolder(), "pending-deletions.txt");
+        File pendingFile;
+        try {
+            pendingFile = new File(getDataFolder(), "pending-deletions.txt");
+        } catch (Exception e) {
+            return;
+        }
         if (!pendingFile.exists()) return;
 
-        File pluginsFolder = getDataFolder().getParentFile();
+        File pluginsFolder;
+        try {
+            pluginsFolder = getDataFolder().getParentFile();
+        } catch (Exception e) {
+            return;
+        }
+        synchronized (deletionLock) {
         try {
             java.util.List<String> lines = java.nio.file.Files.readAllLines(pendingFile.toPath());
             for (String line : lines) {
                 String entry = line == null ? "" : line.trim();
                 if (entry.isEmpty()) continue;
-                
+                if (entry.startsWith("plugin:")) continue;
                 try {
                     if (entry.startsWith("jar:")) {
                         String name = entry.substring(4);
                         File target = new File(pluginsFolder, name);
                         if (target.exists()) {
-                            attemptDeletion(target, 5); // More aggressive retries at shutdown
+                            attemptDeletion(target, 5);
                         }
                     } else if (entry.startsWith("dir:")) {
                         String dirName = entry.substring(4);
                         File targetDir = new File(pluginsFolder, dirName);
                         if (targetDir.exists()) {
-                            java.nio.file.Files.walk(targetDir.toPath())
-                                    .sorted(java.util.Comparator.reverseOrder())
-                                    .forEach(p -> {
-                                        try { java.nio.file.Files.deleteIfExists(p); } catch (Exception ignored) {}
-                                    });
+                            try {
+                                archiveDataFolder(targetDir, dirName);
+                            } catch (Exception ignored) {
+                            }
                         }
                     }
                 } catch (Exception e) {
@@ -305,5 +466,6 @@ public class PluginUpdater extends JavaPlugin implements Listener {
             }
             java.nio.file.Files.deleteIfExists(pendingFile.toPath());
         } catch (Exception ignored) {}
+        }
     }
 }

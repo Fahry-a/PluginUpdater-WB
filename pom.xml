@@ -6,7 +6,7 @@
 
     <groupId>me.webbeck.pluginupdater</groupId>
     <artifactId>PluginUpdater-WB</artifactId>
-    <version>26.1.2-1.0.3</version>
+    <version>26.3-1.0.5</version>
     <packaging>jar</packaging>
 
     <name>PluginUpdater-WB</name>
@@ -32,8 +32,22 @@
         <dependency>
             <groupId>io.papermc.paper</groupId>
             <artifactId>paper-api</artifactId>
-            <version>26.1.2.build.65-stable</version>
+            <version>26.3.build.42-alpha</version>
             <scope>provided</scope>
+        </dependency>
+        <!-- Used directly (JSON, YAML-free parsing); do not rely on transitivity -->
+        <dependency>
+            <groupId>com.google.code.gson</groupId>
+            <artifactId>gson</artifactId>
+            <version>2.14.0</version>
+            <scope>provided</scope>
+        </dependency>
+        <!-- Tests -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.11.4</version>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 

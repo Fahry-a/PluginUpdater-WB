@@ -80,6 +80,12 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
             case "confirm":
                 handleConfirm(sender);
                 break;
+            case "staged":
+                updateDownloader.showStagedUpdates(sender);
+                break;
+            case "errors":
+                showCheckErrors(sender);
+                break;
             case "list":
                 if (args.length > 1) {
                     String filter = args[1].toLowerCase();
@@ -160,8 +166,8 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
                         plugin.sendMsg(sender, ChatColor.RED + "Plugin '" + target + "' not found in config.");
                         return;
                     }
-                    plugin.setPendingDeletionPlugin(resolved);
-                    plugin.sendMsg(sender, ChatColor.YELLOW + "You are about to DELETE plugin '" + resolved + "'. This will remove its config and schedule the jar for deletion on next restart. Type /upd confirm to proceed.");
+                    plugin.setPendingDeletion(sender, resolved);
+                    plugin.sendMsg(sender, ChatColor.YELLOW + "You are about to DELETE plugin '" + resolved + "'. This will remove its config and schedule the jar for deletion on next restart. Type /upd confirm within 60 seconds to proceed.");
                     return;
                 }
 
@@ -176,6 +182,10 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
     }
 
     private void handleResolveCommand(CommandSender sender, String[] args) {
+        if (args.length >= 4 && args[args.length - 1].equalsIgnoreCase("auto")) {
+            showResolveCandidates(sender, PluginUpdaterUtils.joinArgs(args, 2, args.length - 1));
+            return;
+        }
         if (args.length == 3) {
             String rName = configManager.resolvePluginName(PluginUpdaterUtils.joinArgs(args, 2));
             if (rName == null) {
@@ -185,25 +195,27 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
             plugin.sendMsg(sender, ChatColor.AQUA + "Searching Modrinth for the exact ID of " + rName + "...");
             Runnable task = () -> {
                 try {
-                    String realId = updateChecker.getRealModrinthId(rName);
-                    if (realId != null) {
+                    ModrinthResolver.Resolution resolution = configManager.modrinthResolver().resolve(rName);
+                    if (resolution.found) {
                         Bukkit.getScheduler().runTask(plugin, () -> {
-                            String pluginPath = "plugins." + rName;
-                            plugin.getConfig().set(pluginPath + ".type", "MODRINTH");
-                            plugin.getConfig().set(pluginPath + ".project-id", realId);
-                            plugin.getConfig().set(pluginPath + ".github-repo", null);
-                            plugin.getConfig().set(pluginPath + ".custom-url", null);
+                            plugin.getPluginsConfig().set(rName + ".type", "MODRINTH");
+                            plugin.getPluginsConfig().set(rName + ".project-id", resolution.id);
+                            plugin.getPluginsConfig().set(rName + ".github-repo", null);
+                            plugin.getPluginsConfig().set(rName + ".custom-url", null);
+                            plugin.getPluginsConfig().set(rName + ".resolve-failed", null);
                             configManager.saveAndFormatConfig();
-                            plugin.sendMsg(sender, ChatColor.GREEN + "Successfully locked " + rName + " to Modrinth ID: " + realId);
+                            plugin.sendMsg(sender, ChatColor.GREEN + "Successfully locked " + rName + " to Modrinth ID: " + resolution.id);
                         });
                     } else {
-                        plugin.sendMsg(sender, ChatColor.RED + "Could not find a match for " + rName + " on Modrinth.");
+                        plugin.sendMsg(sender, ChatColor.RED + "Could not confidently match " + rName + " on Modrinth."
+                                + ModrinthResolver.describeCandidates(resolution.candidates)
+                                + " See candidates with /upd plugin id " + rName + " auto");
                     }
                 } catch (Exception e) {
                     plugin.sendMsg(sender, ChatColor.RED + "Search failed: " + e.getMessage());
                 }
             };
-            new Thread(task).start();
+            Bukkit.getScheduler().runTaskAsynchronously(plugin, task);
         } else if (args.length == 4) {
             String rName = configManager.resolvePluginName(PluginUpdaterUtils.joinArgs(args, 2, args.length - 1));
             if (rName == null) {
@@ -216,25 +228,45 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
                 plugin.sendMsg(sender, ChatColor.AQUA + "Searching " + (isSpigot ? "Spigot" : "Modrinth") + " for the exact ID of " + rName + "...");
                 Runnable task = () -> {
                     try {
-                        String realId = isSpigot ? updateChecker.getRealSpigotId(rName) : updateChecker.getRealModrinthId(rName);
-                        if (realId != null) {
-                            Bukkit.getScheduler().runTask(plugin, () -> {
-                                String pluginPath = "plugins." + rName;
-                                plugin.getConfig().set(pluginPath + ".type", isSpigot ? "SPIGOT" : "MODRINTH");
-                                plugin.getConfig().set(pluginPath + ".project-id", realId);
-                                plugin.getConfig().set(pluginPath + ".github-repo", null);
-                                plugin.getConfig().set(pluginPath + ".custom-url", null);
-                                configManager.saveAndFormatConfig();
-                                plugin.sendMsg(sender, ChatColor.GREEN + "Successfully locked " + rName + " to " + (isSpigot ? "Spigot" : "Modrinth") + " ID: " + realId);
-                            });
+                        if (isSpigot) {
+                            String realId = updateChecker.getRealSpigotId(rName);
+                            if (realId != null) {
+                                String lockedId = realId;
+                                Bukkit.getScheduler().runTask(plugin, () -> {
+                                    plugin.getPluginsConfig().set(rName + ".type", "SPIGOT");
+                                    plugin.getPluginsConfig().set(rName + ".project-id", lockedId);
+                                    plugin.getPluginsConfig().set(rName + ".github-repo", null);
+                                    plugin.getPluginsConfig().set(rName + ".custom-url", null);
+                                    plugin.getPluginsConfig().set(rName + ".resolve-failed", null);
+                                    configManager.saveAndFormatConfig();
+                                    plugin.sendMsg(sender, ChatColor.GREEN + "Successfully locked " + rName + " to Spigot ID: " + lockedId);
+                                });
+                            } else {
+                                plugin.sendMsg(sender, ChatColor.RED + "Could not find a match for " + rName + " on Spigot. Try /upd plugin id " + rName + " auto");
+                            }
                         } else {
-                            plugin.sendMsg(sender, ChatColor.RED + "Could not find a match for " + rName + " on " + (isSpigot ? "Spigot" : "Modrinth") + ".");
+                            ModrinthResolver.Resolution resolution = configManager.modrinthResolver().resolve(rName);
+                            if (resolution.found) {
+                                Bukkit.getScheduler().runTask(plugin, () -> {
+                                    plugin.getPluginsConfig().set(rName + ".type", "MODRINTH");
+                                    plugin.getPluginsConfig().set(rName + ".project-id", resolution.id);
+                                    plugin.getPluginsConfig().set(rName + ".github-repo", null);
+                                    plugin.getPluginsConfig().set(rName + ".custom-url", null);
+                                    plugin.getPluginsConfig().set(rName + ".resolve-failed", null);
+                                    configManager.saveAndFormatConfig();
+                                    plugin.sendMsg(sender, ChatColor.GREEN + "Successfully locked " + rName + " to Modrinth ID: " + resolution.id);
+                                });
+                            } else {
+                                plugin.sendMsg(sender, ChatColor.RED + "Could not confidently match " + rName + " on Modrinth."
+                                        + ModrinthResolver.describeCandidates(resolution.candidates)
+                                        + " See candidates with /upd plugin id " + rName + " auto");
+                            }
                         }
                     } catch (Exception e) {
                         plugin.sendMsg(sender, ChatColor.RED + "Search failed: " + e.getMessage());
                     }
                 };
-                new Thread(task).start();
+                Bukkit.getScheduler().runTaskAsynchronously(plugin, task);
             } else {
                 plugin.sendMsg(sender, ChatColor.RED + "Usage: /upd plugin id <PluginName> [<Modrinth|Hangar|Spigot|GitHub|Custom> <id/repo/url>]");
             }
@@ -252,15 +284,99 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
         }
     }
 
+    private void showResolveCandidates(CommandSender sender, String name) {
+        String rName = configManager.resolvePluginName(name);
+        String display = rName != null ? rName : name;
+        plugin.sendMsg(sender, ChatColor.AQUA + "Searching all sources for " + display + " (nothing will be changed)...");
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            StringBuilder out = new StringBuilder();
+            boolean modrinthFound = false;
+            boolean spigotHasAny = false;
+            try {
+                ModrinthResolver.Resolution resolution = configManager.modrinthResolver().resolve(display);
+                modrinthFound = resolution.found;
+                if (resolution.found) {
+                    out.append(ChatColor.GREEN).append("Modrinth: ").append(resolution.title)
+                            .append(" (").append(resolution.id).append(")\n");
+                } else {
+                    out.append(ChatColor.YELLOW).append("Modrinth: no confident match.")
+                            .append(ModrinthResolver.describeCandidates(resolution.candidates)).append("\n");
+                }
+            } catch (Exception e) {
+                out.append(ChatColor.RED).append("Modrinth: search failed (").append(e.getMessage()).append(")\n");
+            }
+            try {
+                String spigotId = updateChecker.getRealSpigotId(display);
+                if (spigotId != null) {
+                    spigotHasAny = true;
+                    out.append(ChatColor.GREEN).append("Spigot: resource ").append(spigotId).append("\n");
+                } else {
+                    List<ConfigManager.SpigotCandidate> options = configManager.spigotCandidates(display);
+                    if (options.isEmpty()) {
+                        out.append(ChatColor.YELLOW).append("Spigot: no match\n");
+                    } else {
+                        spigotHasAny = true;
+                        out.append(ChatColor.YELLOW).append("Spigot: no exact match.")
+                                .append(ConfigManager.describeSpigotCandidates(options)).append("\n");
+                    }
+                }
+            } catch (Exception e) {
+                out.append(ChatColor.RED).append("Spigot: search failed (").append(e.getMessage()).append(")\n");
+            }
+            if (!modrinthFound && !spigotHasAny) {
+                out.append(ChatColor.YELLOW).append(ConfigManager.privateJarHint(display)).append("\n");
+            }
+            plugin.sendMsg(sender, out.toString().trim());
+            plugin.sendMsg(sender, ChatColor.GRAY + "Apply with: /upd plugin id " + display + " <Modrinth|Spigot|Hangar|GitHub|Custom> <id/repo/url>");
+        });
+    }
+
+    private void showCheckErrors(CommandSender sender) {
+        Map<String, CheckError> errors = plugin.getCheckErrors();
+        List<String> keys = new ArrayList<>(errors.keySet());
+        keys.sort(String.CASE_INSENSITIVE_ORDER);
+
+        ConfigurationSection pluginsSec = plugin.getPluginsConfig();
+        List<String> unresolved = new ArrayList<>();
+        if (pluginsSec != null) {
+            for (String key : pluginsSec.getKeys(false)) {
+                if (pluginsSec.getBoolean(key + ".resolve-failed", false)) {
+                    unresolved.add(key);
+                }
+            }
+        }
+        unresolved.sort(String.CASE_INSENSITIVE_ORDER);
+
+        if (keys.isEmpty() && unresolved.isEmpty()) {
+            plugin.sendMsg(sender, ChatColor.GREEN + "No check errors - every source answered.");
+            return;
+        }
+
+        plugin.sendMsg(sender, ChatColor.GOLD + "=== Check Errors ===");
+        for (String key : keys) {
+            CheckError error = errors.get(key);
+            plugin.sendMsg(sender, ChatColor.RED + "- " + error.pluginName + ": " + error.label()
+                    + ChatColor.GRAY + " - " + error.detail);
+            plugin.sendMsg(sender, ChatColor.DARK_GRAY + "  Fix: " + error.fixHint());
+        }
+        for (String name : unresolved) {
+            if (errors.containsKey(name.toLowerCase())) continue;
+            plugin.sendMsg(sender, ChatColor.YELLOW + "- " + name + ": ID NOT RESOLVED"
+                    + ChatColor.GRAY + " - auto-resolve found no confident match.");
+            plugin.sendMsg(sender, ChatColor.DARK_GRAY + "  Fix: /upd plugin id " + name + " auto, then set it manually.");
+            plugin.sendMsg(sender, ChatColor.DARK_GRAY + "  " + ConfigManager.privateJarHint(name));
+        }
+    }
+
     private void handleConfirm(CommandSender sender) {
-        String pending = plugin.getPendingDeletionPlugin();
+        String pending = plugin.consumePendingDeletion(sender);
         if (pending == null) {
-            plugin.sendMsg(sender, ChatColor.RED + "No pending action to confirm.");
+            plugin.sendMsg(sender, ChatColor.RED + "No pending action to confirm (it may have expired - request the deletion again).");
             return;
         }
 
         // Remove plugin config immediately
-        plugin.getConfig().set("plugins." + pending, null);
+        plugin.getPluginsConfig().set(pending, null);
         configManager.saveAndFormatConfig();
 
         // Try to find the jar file in the plugins folder to schedule for deletion
@@ -288,16 +404,13 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
             }
         }
         
-        // Fallback: scan plugins folder with improved matching
+        // Fallback: scan plugins folder, exact matches only
         if (foundJar == null && pluginsFolder.exists()) {
             String pluginLower = pending.toLowerCase();
             File[] matches = pluginsFolder.listFiles((dir, name) -> {
                 String ln = name.toLowerCase();
                 if (!ln.endsWith(".jar")) return false;
-                // Match: exact name, starts with name-, or contains name (but not as substring of another word)
-                return ln.equals(pluginLower + ".jar") 
-                    || ln.startsWith(pluginLower + "-")
-                    || (ln.contains(pluginLower) && (ln.indexOf(pluginLower) == 0 || !Character.isLetterOrDigit(ln.charAt(ln.indexOf(pluginLower) - 1))));
+                return ln.equals(pluginLower + ".jar") || ln.startsWith(pluginLower + "-");
             });
             if (matches != null && matches.length > 0) {
                 foundJar = matches[0].getName();
@@ -309,19 +422,16 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
 
         File pendingFile = new File(plugin.getDataFolder(), "pending-deletions.txt");
         try {
-            StringBuilder out = new StringBuilder();
             if (foundJar != null) {
-                out.append("jar:").append(foundJar).append(System.lineSeparator());
+                plugin.appendPendingDeletion("jar:" + foundJar);
             }
-            // schedule data folder deletion as well
-            out.append("dir:").append(pending).append(System.lineSeparator());
-            java.nio.file.Files.writeString(pendingFile.toPath(), out.toString(), java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
-            plugin.sendMsg(sender, ChatColor.GREEN + "Deletion scheduled for plugin '" + pending + "'" + (foundJar != null ? " (jar: " + foundJar + ")" : "") + " and its data folder. Restart server to apply deletions.");
+            plugin.appendPendingDeletion("plugin:" + pending);
+            // Data folder is archived (not deleted) on next start; see deleted-backups/.
+            plugin.appendPendingDeletion("dir:" + pending);
+            plugin.sendMsg(sender, ChatColor.GREEN + "Deletion scheduled for plugin '" + pending + "'" + (foundJar != null ? " (jar: " + foundJar + ")" : "") + " and its data folder (archived to deleted-backups/). Restart server to apply deletions.");
         } catch (Exception e) {
             plugin.sendMsg(sender, ChatColor.RED + "Failed to schedule deletion: " + e.getMessage());
         }
-
-        plugin.setPendingDeletionPlugin(null);
     }
 
     private void handleAddCommand(CommandSender sender, String[] args) {
@@ -331,10 +441,12 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
         }
 
         String url = args[2];
-        String pluginName = configManager.addPluginFromUrl(sender, url);
-        if (pluginName != null) {
-            updateDownloader.downloadPluginToPluginsFolder(sender, pluginName);
-        }
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            String pluginName = configManager.addPluginFromUrl(sender, url);
+            if (pluginName != null) {
+                updateDownloader.downloadPluginToPluginsFolder(sender, pluginName);
+            }
+        });
     }
 
     private void handleGeyserCommand(CommandSender sender, String[] args) {
@@ -370,6 +482,10 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
             case "toggle":
                 if (args.length < 5) return;
                 String addon = args[3];
+                if (addon.equalsIgnoreCase("Geyser")) {
+                    plugin.sendMsg(sender, ChatColor.YELLOW + "Geyser is tracked as a regular plugin via Modrinth - use /upd plugin toggle instead.");
+                    return;
+                }
                 boolean state = Boolean.parseBoolean(args[4]);
                 plugin.getConfig().set("geyser-addons." + addon, state);
                 plugin.saveConfig();
@@ -459,7 +575,7 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
         }
 
         if (pluginName.equalsIgnoreCase("all") || pluginName.equals("*")) {
-            ConfigurationSection pluginsSec = plugin.getConfig().getConfigurationSection("plugins");
+            ConfigurationSection pluginsSec = plugin.getPluginsConfig();
             if (pluginsSec != null) {
                 for (String key : pluginsSec.getKeys(false)) {
                     pluginsSec.set(key + ".allowed-release-types", newChannelsForConfig);
@@ -480,7 +596,7 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
             return;
         }
 
-        plugin.getConfig().getConfigurationSection("plugins." + resolvedName).set("allowed-release-types", newChannelsForConfig);
+        plugin.getPluginsConfig().getConfigurationSection(resolvedName).set("allowed-release-types", newChannelsForConfig);
         configManager.saveAndFormatConfig();
         plugin.sendMsg(sender, ChatColor.GREEN + "Updated tracking channel for " + resolvedName + " to: " + String.join(", ", newChannelsForConfig));
         updateChecker.runUpdateCheck(Bukkit.getConsoleSender(), false, null);
@@ -508,7 +624,7 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
                 plugin.sendMsg(sender, ChatColor.RED + "Plugin '" + context + "' not found in config.");
                 return;
             }
-            plugin.getConfig().set("plugins." + resolvedName + ".server-type", type.toLowerCase());
+            plugin.getPluginsConfig().set(resolvedName + ".server-type", type.toLowerCase());
             configManager.saveAndFormatConfig();
             plugin.sendMsg(sender, ChatColor.GREEN + "Server type override for " + resolvedName + " set to: " + type.toLowerCase());
         }
@@ -523,17 +639,21 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
         sendHelpLine(sender, "/upd -v", "Displays the PluginUpdater version.");
         sendHelpLine(sender, "/upd check", "Checks all plugins for updates asynchronously.");
         sendHelpLine(sender, "/upd run [plugin]", "Downloads and stages pending updates.");
+        sendHelpLine(sender, "/upd staged", "Inspects the update folder without restarting.");
+        sendHelpLine(sender, "/upd errors", "Lists plugins whose source could not be checked.");
+        sendHelpLine(sender, "/upd confirm", "Confirms a pending plugin deletion (expires in 60s).");
         sendHelpLine(sender, "/upd reload", "Reloads config and synchronizes plugins.");
         sendHelpLine(sender, "/upd list [all|versions|enabled|disabled]", "Lists plugins based on status/filter.");
         sendHelpLine(sender, "/upd plugin info <plugin>", "Shows version & channel info for a plugin.");
         sendHelpLine(sender, "/upd plugin redownload <plugin>", "Forces a fresh download of a plugin.");
         sendHelpLine(sender, "/upd plugin rollback <plugin> [file]", "Opens the backup restoration menu.");
         sendHelpLine(sender, "/upd plugin add <url>", "Adds a plugin from a detected source URL.");
-        sendHelpLine(sender, "/upd plugin id <plugin>", "Searches Modrinth for the exact ID.");
+        sendHelpLine(sender, "/upd plugin id <plugin>", "Searches Modrinth for the project ID.");
+        sendHelpLine(sender, "/upd plugin id <plugin> auto", "Shows scored source candidates without changing anything.");
         sendHelpLine(sender, "/upd plugin id <plugin> <Modrinth|Hangar|Spigot|GitHub|Custom> <id/repo/url>", "Sets plugin source type and source ID or URL in config.");
-        sendHelpLine(sender, "/upd plugin geyser", "Manage Geyser, Floodgate & MCXboxBroadcast.");
-        sendHelpLine(sender, "/upd plugin geyser download <all|Geyser|Floodgate|MCXboxBroadcast>", "Download any missing Geyser addon jars.");
-        sendHelpLine(sender, "/upd plugin geyser update <all|Geyser|Floodgate|MCXboxBroadcast>", "Force update Geyser addon jars.");
+        sendHelpLine(sender, "/upd plugin geyser", "Manage Floodgate & MCXboxBroadcast (Geyser itself is tracked via Modrinth).");
+        sendHelpLine(sender, "/upd plugin geyser download <all|Floodgate|MCXboxBroadcast>", "Download any missing Geyser addon jars.");
+        sendHelpLine(sender, "/upd plugin geyser update <all|Floodgate|MCXboxBroadcast>", "Force update Geyser addon jars.");
     }
 
     private void sendHelpLine(CommandSender sender, String cmd, String desc) {
@@ -549,7 +669,7 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
             return;
         }
 
-        ConfigurationSection targetSec = plugin.getConfig().getConfigurationSection("plugins." + resolvedName);
+        ConfigurationSection targetSec = plugin.getPluginsConfig().getConfigurationSection(resolvedName);
         if (targetSec == null) {
             plugin.sendMsg(sender, ChatColor.RED + "Plugin '" + resolvedName + "' not found in config.");
             return;
@@ -563,23 +683,22 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
 
         var runningPlugin = org.bukkit.Bukkit.getPluginManager().getPlugin(resolvedName);
         String currentVer = runningPlugin != null ? runningPlugin.getDescription().getVersion() : targetSec.getString("current-version", "0.0.0");
-        List<String> currentTracked = targetSec.getStringList("allowed-release-types");
+        List<String> currentTracked = new ArrayList<>(targetSec.getStringList("allowed-release-types"));
         String serverFileType = configManager.getPluginServerType(resolvedName);
+        String projectId = targetSec.getString("project-id");
+        String githubRepo = targetSec.getString("github-repo");
+        String customUrl = targetSec.getString("custom-url");
 
         plugin.sendMsg(sender, ChatColor.AQUA + "Fetching version info for " + resolvedName + "...");
 
+        PluginSnapshot snapshot = new PluginSnapshot(resolvedName, type, projectId, githubRepo, customUrl,
+                currentTracked.isEmpty() ? List.of("release") : currentTracked, currentVer, serverFileType,
+                configManager.getMinecraftVersion(), null, currentVer, null, null, null, null,
+                targetSec.getBoolean("game-version-filter", true), targetSec.getString("github-asset", null));
         Runnable task = () -> {
             Map<String, String> latestVersions = new java.util.HashMap<>();
             try {
-                if (type.equals("MODRINTH")) {
-                    latestVersions.putAll(updateChecker.fetchAllChannelsModrinth(targetSec.getString("project-id"), serverFileType));
-                } else if (type.equals("GITHUB")) {
-                    latestVersions.putAll(updateChecker.fetchAllChannelsGitHub(targetSec.getString("github-repo")));
-                } else if (type.equals("HANGAR")) {
-                    latestVersions.putAll(updateChecker.fetchAllChannelsHangar(targetSec.getString("project-id")));
-                } else if (type.equals("SPIGOT")) {
-                    latestVersions.putAll(updateChecker.fetchAllChannelsSpigot(targetSec.getString("project-id")));
-                }
+                latestVersions.putAll(updateChecker.getRegistrySnapshotChannels(snapshot));
             } catch (Exception e) {
                 plugin.sendMsg(sender, ChatColor.RED + "Failed to fetch data: " + e.getMessage());
                 return;
@@ -683,7 +802,7 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
                 sender.sendMessage(serverLine);
             });
         };
-        new Thread(task).start();
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, task);
     }
 
     private void showTrackOptions(CommandSender sender, String pluginName) {
@@ -724,7 +843,7 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
     }
 
     private void displayToggleList(CommandSender sender, boolean showEnabled) {
-        ConfigurationSection pSec = plugin.getConfig().getConfigurationSection("plugins");
+        ConfigurationSection pSec = plugin.getPluginsConfig();
         sender.sendMessage(LegacyComponentSerializer.legacySection().deserialize(ChatColor.GOLD + "=== " + (showEnabled ? "Enabled" : "Disabled") + " Plugins ==="));
 
         if (pSec != null) {
@@ -824,7 +943,7 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
         List<String> completions = new ArrayList<>();
 
         if (args.length == 1) {
-            List<String> subs = Arrays.asList("check", "run", "list", "reload", "plugin");
+            List<String> subs = Arrays.asList("check", "run", "list", "staged", "errors", "reload", "plugin", "confirm", "help", "-v");
             completions.addAll(subs.stream().filter(s -> s.startsWith(args[0].toLowerCase())).collect(Collectors.toList()));
         } else if (args.length == 2) {
             if (args[0].equalsIgnoreCase("run")) {
@@ -833,12 +952,12 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
                 List<String> mods = Arrays.asList("all", "versions", "enabled", "disabled", "pending");
                 completions.addAll(mods.stream().filter(s -> s.startsWith(args[1].toLowerCase())).collect(Collectors.toList()));
             } else if (args[0].equalsIgnoreCase("plugin")) {
-                List<String> subs = Arrays.asList("add", "info", "rollback", "redownload", "geyser");
+                List<String> subs = Arrays.asList("add", "info", "rollback", "redownload", "geyser", "id", "resolve", "toggle", "track");
                 completions.addAll(subs.stream().filter(s -> s.startsWith(args[1].toLowerCase())).collect(Collectors.toList()));
             }
         } else if (args.length == 3) {
             if (args[0].equalsIgnoreCase("plugin")) {
-                if (Arrays.asList("rollback", "redownload", "info").contains(args[1].toLowerCase())) {
+                if (Arrays.asList("rollback", "redownload", "info", "toggle", "id", "resolve").contains(args[1].toLowerCase())) {
                     completions.addAll(configManager.getEnabledPlugins().stream()
                             .filter(s -> s.toLowerCase().startsWith(args[2].toLowerCase())).collect(Collectors.toList()));
                 } else if (args[1].equalsIgnoreCase("track")) {
@@ -864,7 +983,7 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
                         }
                     }
                 } else if (args[1].equalsIgnoreCase("id") || args[1].equalsIgnoreCase("resolve")) {
-                    List<String> sources = Arrays.asList("Modrinth", "Hangar", "Spigot", "GitHub", "Custom");
+                    List<String> sources = Arrays.asList("Modrinth", "Hangar", "Spigot", "GitHub", "Custom", "auto");
                     completions.addAll(sources.stream().filter(s -> s.toLowerCase().startsWith(args[3].toLowerCase())).collect(Collectors.toList()));
                 } else if (args[1].equalsIgnoreCase("track")) {
                     if (args[2].equalsIgnoreCase("server")) {
@@ -876,10 +995,10 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
                     }
                 } else if (args[1].equalsIgnoreCase("geyser")) {
                     if (args[2].equalsIgnoreCase("toggle")) {
-                        List<String> addons = Arrays.asList("Geyser", "Floodgate", "MCXboxBroadcast");
+                        List<String> addons = Arrays.asList("Floodgate", "MCXboxBroadcast");
                         completions.addAll(addons.stream().filter(s -> s.toLowerCase().startsWith(args[3].toLowerCase())).collect(Collectors.toList()));
                     } else if (args[2].equalsIgnoreCase("update") || args[2].equalsIgnoreCase("download")) {
-                        List<String> addons = Arrays.asList("all", "Geyser", "Floodgate", "MCXboxBroadcast");
+                        List<String> addons = Arrays.asList("all", "Floodgate", "MCXboxBroadcast");
                         completions.addAll(addons.stream().filter(s -> s.toLowerCase().startsWith(args[3].toLowerCase())).collect(Collectors.toList()));
                     }
                 }

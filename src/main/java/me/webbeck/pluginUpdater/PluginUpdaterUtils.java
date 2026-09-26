@@ -11,22 +11,50 @@ public class PluginUpdaterUtils {
     }
 
     public static boolean versionsMatch(String curr, String newV) {
-        String c = cleanVersion(curr);
-        String n = cleanVersion(newV);
-        if (!c.equals(n)) {
-            if (c.startsWith(n + ".") || c.startsWith(n + "-") || c.startsWith(n + "_")) return true;
-            if (n.startsWith(c + ".") || n.startsWith(c + "-") || n.startsWith(c + "_")) return true;
-            return false;
+        return compareVersions(curr, newV) == 0;
+    }
+
+    /**
+     * True when the remote version is strictly newer than the current one.
+     * Guards against downgrades: a remote build older than (or equal to) what is
+     * running is never reported as an update.
+     */
+    public static boolean isNewerThan(String curr, String newV) {
+        return compareVersions(curr, newV) < 0;
+    }
+
+    /**
+     * Numeric-aware version ordering. Missing trailing segments count as zero, so
+     * "1.0" equals "1.0.0". Non-numeric segments compare case-insensitively.
+     */
+    public static int compareVersions(String a, String b) {
+        String[] pa = cleanVersion(a).split("[.\\-_]");
+        String[] pb = cleanVersion(b).split("[.\\-_]");
+        int len = Math.max(pa.length, pb.length);
+        for (int i = 0; i < len; i++) {
+            int cmp = compareToken(i < pa.length ? pa[i] : "0", i < pb.length ? pb[i] : "0");
+            if (cmp != 0) return cmp;
         }
-        // Base versions match — compare +build metadata (e.g. 5.9.2-SNAPSHOT vs 5.9.2-SNAPSHOT+1003)
-        String currMeta = extractMeta(curr);
-        String newMeta = extractMeta(newV);
-        if (newMeta == null) return true;
-        if (currMeta == null) return false;
+        return compareMeta(a, b);
+    }
+
+    private static int compareToken(String a, String b) {
         try {
-            return Integer.parseInt(currMeta) >= Integer.parseInt(newMeta);
+            return Integer.compare(Integer.parseInt(a), Integer.parseInt(b));
         } catch (NumberFormatException e) {
-            return currMeta.equalsIgnoreCase(newMeta);
+            return a.compareToIgnoreCase(b);
+        }
+    }
+
+    private static int compareMeta(String a, String b) {
+        String ma = extractMeta(a);
+        String mb = extractMeta(b);
+        if (mb == null) return 0;
+        if (ma == null) return -1;
+        try {
+            return Integer.compare(Integer.parseInt(ma), Integer.parseInt(mb));
+        } catch (NumberFormatException e) {
+            return ma.compareToIgnoreCase(mb);
         }
     }
 

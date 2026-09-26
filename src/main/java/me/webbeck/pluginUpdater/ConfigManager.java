@@ -30,21 +30,31 @@ public class ConfigManager {
     private List<String> allowedPlayers;
     private String trackingType;
 
+    /** Modrinth project for Geyser-Spigot (loaders paper/spigot, file Geyser-Spigot.jar). */
+    public static final String GEYSER_MODRINTH_ID = "wKkoqHrH";
+
     public ConfigManager(PluginUpdater plugin) {
         this.plugin = plugin;
     }
 
+    /** True for either plugin.yml name Geyser reports (jar is always Geyser-Spigot.jar). */
+    public static boolean isGeyserPluginName(String name) {
+        return name != null
+                && (name.equalsIgnoreCase("geyser") || name.equalsIgnoreCase("geyser-spigot"));
+    }
+
     public void syncConfig() {
         plugin.reloadConfig();
+        plugin.reloadPluginsConfig();
 
-        mcVersion = plugin.getConfig().getString("minecraft-version", Bukkit.getBukkitVersion().split("-")[0]);
+        mcVersion = resolveMinecraftVersion();
         serverTypeOverride = plugin.getConfig().getString("server-type-override", "paper");
         trackingType = plugin.getConfig().getString("tracking-type", "all");
         allowedPlayers = plugin.getConfig().getStringList("allowed-players");
-
-        if (!plugin.getConfig().contains("minecraft-version")) plugin.getConfig().set("minecraft-version", mcVersion);
+        if (!plugin.getConfig().contains("minecraft-version")) plugin.getConfig().set("minecraft-version", "");
         if (!plugin.getConfig().contains("server-type-override")) plugin.getConfig().set("server-type-override", "paper");
         if (!plugin.getConfig().contains("tracking-type")) plugin.getConfig().set("tracking-type", "all");
+        if (!plugin.getConfig().contains("github-token")) plugin.getConfig().set("github-token", "");
         if (!plugin.getConfig().contains("allowed-players")) plugin.getConfig().set("allowed-players", new ArrayList<>(Collections.singletonList("AdminName")));
 
         if (!plugin.getConfig().contains("geyser-addons")) {
@@ -54,14 +64,16 @@ public class ConfigManager {
             gSec.set("Floodgate", true);
             gSec.set("MCXboxBroadcast", true);
         }
+        ensureGeyserAddonDefaults();
 
-        ConfigurationSection pluginsSection = plugin.getConfig().getConfigurationSection("plugins");
-        if (pluginsSection == null) {
-            pluginsSection = plugin.getConfig().createSection("plugins");
-        }
+        ConfigurationSection pluginsSection = plugin.getPluginsConfig();
 
         boolean changesMade = false;
-        Set<String> ignoredDetectedPlugins = Set.of("geyser", "geyser-spigot", "floodgate");
+        // Floodgate stays out of plugins.yml: its Spigot jar exists on no versioned
+        // API (Modrinth bWrNNfkb is Fabric/NeoForge, GitHub has no releases), so it
+        // is managed via geyser-addons direct download. Geyser is a regular plugin
+        // tracked on Modrinth and intentionally NOT ignored.
+        Set<String> ignoredDetectedPlugins = Set.of("floodgate");
         List<String> newlyScannedPlugins = new ArrayList<>();
 
         Set<String> loadedPlugins = Arrays.stream(Bukkit.getPluginManager().getPlugins())
@@ -74,9 +86,11 @@ public class ConfigManager {
                 continue;
             }
             if (!loadedPlugins.contains(configPluginName.toLowerCase()) || ignoredDetectedPlugins.contains(configPluginName.toLowerCase())) {
-                pluginsSection.set(configPluginName, null);
-                changesMade = true;
-                plugin.getLogger().info("Removed uninstalled or ignored plugin from config: " + configPluginName);
+                if (pluginsSection.getBoolean(configPluginName + ".installed", true)) {
+                    pluginsSection.set(configPluginName + ".installed", false);
+                    changesMade = true;
+                    plugin.getLogger().info("Marked " + configPluginName + " as not installed (kept in plugins.yml).");
+                }
             }
         }
 
@@ -88,22 +102,38 @@ public class ConfigManager {
             if (!pluginsSection.contains(name)) {
                 ConfigurationSection pSec = pluginsSection.createSection(name);
                 pSec.set("enabled", true);
-                pSec.set("type", "MODRINTH");
-                pSec.set("project-id", name.toLowerCase().replace(" ", "-"));
-                if (trackingType != null) {
-                    if (trackingType.equalsIgnoreCase("all")) {
-                        pSec.set("allowed-release-types", Arrays.asList("release", "beta", "alpha"));
-                    } else {
-                        pSec.set("allowed-release-types", Collections.singletonList(trackingType.toLowerCase()));
-                    }
+                if (isGeyserPluginName(name)) {
+                    // Pin Geyser to its Modrinth project: every published version is
+                    // version_type beta, and no build targets the newest game version,
+                    // so seed channel beta and skip the game_versions filter (saves
+                    // one request per check; the unfiltered fallback would run anyway).
+                    pSec.set("type", "MODRINTH");
+                    pSec.set("project-id", GEYSER_MODRINTH_ID);
+                    pSec.set("allowed-release-types", Collections.singletonList("beta"));
+                    pSec.set("game-version-filter", false);
+                    plugin.getLogger().info("Tracked Geyser via Modrinth (" + GEYSER_MODRINTH_ID + ", channel beta).");
                 } else {
-                    pSec.set("allowed-release-types", Collections.singletonList("release"));
+                    pSec.set("type", "MODRINTH");
+                    pSec.set("project-id", name.toLowerCase().replace(" ", "-"));
+                    if (trackingType != null) {
+                        if (trackingType.equalsIgnoreCase("all")) {
+                            pSec.set("allowed-release-types", Arrays.asList("release", "beta", "alpha"));
+                        } else {
+                            pSec.set("allowed-release-types", Collections.singletonList(trackingType.toLowerCase()));
+                        }
+                    } else {
+                        pSec.set("allowed-release-types", Collections.singletonList("release"));
+                    }
+                    newlyScannedPlugins.add(name);
                 }
                 pSec.set("current-version", plugin.getDescription().getVersion());
                 changesMade = true;
-                newlyScannedPlugins.add(name);
             } else {
                 ConfigurationSection pSec = pluginsSection.getConfigurationSection(name);
+                if (pSec != null && pSec.contains("installed")) {
+                    pSec.set("installed", null);
+                    changesMade = true;
+                }
                 if (pSec != null && !pSec.contains("allowed-release-types")) {
                     if (trackingType != null) {
                         if (trackingType.equalsIgnoreCase("all")) {
@@ -128,64 +158,143 @@ public class ConfigManager {
 
         sortPluginConfig(pluginsSection);
 
-        // If tracking-type is set, enforce it for all plugins
-        if (trackingType != null) {
-            for (String key : pluginsSection.getKeys(false)) {
-                if (trackingType.equalsIgnoreCase("all")) {
-                    pluginsSection.set(key + ".allowed-release-types", Arrays.asList("release", "beta", "alpha"));
-                } else {
-                    pluginsSection.set(key + ".allowed-release-types", Collections.singletonList(trackingType.toLowerCase()));
-                }
-            }
-            changesMade = true;
-        }
-
-        if (changesMade || plugin.getConfig().getKeys(false).size() <= 4) {
+        // tracking-type is only the default for plugins that have no explicit
+        // allowed-release-types (applied above). It never overwrites per-plugin choices.
+        if (changesMade) {
             saveAndFormatConfig();
         }
 
-        if (!newlyScannedPlugins.isEmpty()) {
+        List<String> toResolve = new ArrayList<>(newlyScannedPlugins);
+        for (String key : pluginsSection.getKeys(false)) {
+            if (pluginsSection.getBoolean(key + ".resolve-failed", false) && !toResolve.contains(key)) {
+                toResolve.add(key);
+            }
+        }
+
+        if (!toResolve.isEmpty()) {
+            // Snapshot Yaml on this (main) thread; the worker never touches Yaml off-thread.
+            Map<String, String> snapshotTypes = new HashMap<>();
+            Map<String, String> snapshotIds = new HashMap<>();
+            for (String pName : toResolve) {
+                String currentType = plugin.getPluginsConfig().getString(pName + ".type", "MODRINTH");
+                String currentId = currentType.equals("GITHUB")
+                        ? plugin.getPluginsConfig().getString(pName + ".github-repo", "")
+                        : plugin.getPluginsConfig().getString(pName + ".project-id", "");
+                snapshotTypes.put(pName, currentType);
+                snapshotIds.put(pName, currentId != null ? currentId : "");
+            }
+            String loaderFacet = modrinthLoaderFacet();
+            java.util.concurrent.Executor exec;
+            try {
+                exec = plugin.getIoExecutors() != null ? plugin.getIoExecutors().checkPool() : java.util.concurrent.ForkJoinPool.commonPool();
+            } catch (Exception e) {
+                exec = java.util.concurrent.ForkJoinPool.commonPool();
+            }
             CompletableFuture.runAsync(() -> {
                 Map<String, String> resolvedIds = new HashMap<>();
                 Map<String, String> resolvedTypes = new HashMap<>();
+                List<String> stillFailing = new ArrayList<>();
 
-                for (String pName : newlyScannedPlugins) {
-                    try {
-                        String realId = getRealModrinthId(pName);
-                        if (realId != null) {
-                            resolvedIds.put(pName, realId);
-                            resolvedTypes.put(pName, "MODRINTH");
-                            continue;
-                        }
-                    } catch (Exception ignored) {
+                ModrinthResolver resolver = new ModrinthResolver(plugin.getHttpClient(), loaderFacet);
+                for (String pName : toResolve) {
+                    String currentType = snapshotTypes.getOrDefault(pName, "MODRINTH");
+                    String currentId = snapshotIds.getOrDefault(pName, "");
+
+                    // A configured ID that still answers 200 is left alone.
+                    if (currentType.equals("MODRINTH") && !currentId.isBlank()) {
+                        Boolean valid = resolver.validateId(currentId);
+                        if (Boolean.TRUE.equals(valid)) continue;
+                        if (valid == null) continue; // network failed - retry next sync
                     }
+
+                    boolean done = false;
+                    try {
+                        ModrinthResolver.Resolution resolution = resolver.resolve(pName);
+                        if (resolution.found) {
+                            resolvedIds.put(pName, resolution.id);
+                            resolvedTypes.put(pName, "MODRINTH");
+                            done = true;
+                        } else {
+                            plugin.getLogger().warning("Could not confidently match " + pName + " on Modrinth."
+                                    + formatCandidates(resolution.candidates)
+                                    + " Use /upd plugin id " + pName + " <Modrinth|Hangar|Spigot|GitHub|Custom> <id/repo/url>.");
+                        }
+                    } catch (Exception e) {
+                        plugin.getLogger().warning("Modrinth resolve failed for " + pName + ": " + e.getMessage());
+                    }
+                    if (done) continue;
 
                     try {
                         String realSpigotId = getRealSpigotId(pName);
                         if (realSpigotId != null) {
                             resolvedIds.put(pName, realSpigotId);
                             resolvedTypes.put(pName, "SPIGOT");
+                            continue;
                         }
-                    } catch (Exception ignored) {
+                        List<SpigotCandidate> options = spigotCandidates(pName);
+                        if (!options.isEmpty()) {
+                            plugin.getLogger().warning("No exact Spigot match for " + pName + "."
+                                    + describeSpigotCandidates(options)
+                                    + " Apply one with /upd plugin id " + pName + " Spigot <id>.");
+                        } else {
+                            plugin.getLogger().warning("No public source found for " + pName + ". " + privateJarHint(pName));
+                        }
+                    } catch (Exception e) {
+                        plugin.getLogger().warning("Spigot resolve failed for " + pName + ": " + e.getMessage());
                     }
+                    stillFailing.add(pName);
                 }
 
-                if (!resolvedIds.isEmpty()) {
-                    Bukkit.getScheduler().runTask(plugin, () -> {
-                        for (Map.Entry<String, String> entry : resolvedIds.entrySet()) {
-                            String pluginName = entry.getKey();
-                            String resolvedId = entry.getValue();
-                            String sourceType = resolvedTypes.getOrDefault(pluginName, "MODRINTH");
-                            plugin.getConfig().set("plugins." + pluginName + ".type", sourceType);
-                            plugin.getConfig().set("plugins." + pluginName + ".project-id", resolvedId);
-                            plugin.getConfig().set("plugins." + pluginName + ".github-repo", null);
-                            plugin.getConfig().set("plugins." + pluginName + ".custom-url", null);
-                            plugin.getLogger().info("Auto-resolved precise " + sourceType + " ID for " + pluginName + ": " + resolvedId);
+                Bukkit.getScheduler().runTask(plugin, () -> {
+                    for (Map.Entry<String, String> entry : resolvedIds.entrySet()) {
+                        String pluginName = entry.getKey();
+                        String resolvedId = entry.getValue();
+                        String sourceType = resolvedTypes.getOrDefault(pluginName, "MODRINTH");
+                        plugin.getPluginsConfig().set(pluginName + ".type", sourceType);
+                        plugin.getPluginsConfig().set(pluginName + ".project-id", resolvedId);
+                        plugin.getPluginsConfig().set(pluginName + ".github-repo", null);
+                        plugin.getPluginsConfig().set(pluginName + ".custom-url", null);
+                        plugin.getPluginsConfig().set(pluginName + ".resolve-failed", null);
+                        plugin.getLogger().info("Auto-resolved precise " + sourceType + " ID for " + pluginName + ": " + resolvedId);
+                    }
+                    for (String pluginName : stillFailing) {
+                        if (!resolvedIds.containsKey(pluginName)) {
+                            plugin.getPluginsConfig().set(pluginName + ".resolve-failed", true);
                         }
+                    }
+                    if (!resolvedIds.isEmpty() || !stillFailing.isEmpty()) {
                         saveAndFormatConfig();
-                    });
-                }
-            });
+                    }
+                });
+            }, exec);
+        }
+    }
+
+    private void ensureGeyserAddonDefaults() {
+        try {
+            var cfg = plugin.getConfig();
+            // Geyser left geyser-addons: it is a regular plugin tracked on Modrinth
+            // (see plugins.yml). Drop legacy keys so nothing double-downloads it.
+            cfg.set("geyser-addons.Geyser", null);
+            cfg.set("geyser-addons.Geyser-url", null);
+            cfg.set("geyser-addons.Geyser-file", null);
+            // Floodgate: Spigot jar lives on no versioned API, direct download only.
+            if (!cfg.contains("geyser-addons.Floodgate-url")) {
+                cfg.set("geyser-addons.Floodgate-url",
+                        "https://download.geysermc.org/v2/projects/floodgate/versions/latest/builds/latest/downloads/spigot");
+            }
+            if (!cfg.contains("geyser-addons.Floodgate-file")) cfg.set("geyser-addons.Floodgate-file", "floodgate.jar");
+            // MCXboxBroadcast: GitHub release with an explicit asset pin (the release
+            // also ships a Standalone jar, so fuzzy matching would refuse to choose).
+            if (!cfg.contains("geyser-addons.MCXboxBroadcast-repo")) {
+                cfg.set("geyser-addons.MCXboxBroadcast-repo", "MCXboxBroadcast/Broadcaster");
+            }
+            if (!cfg.contains("geyser-addons.MCXboxBroadcast-asset")) {
+                cfg.set("geyser-addons.MCXboxBroadcast-asset", "MCXboxBroadcastExtension.jar");
+            }
+            if (!cfg.contains("geyser-addons.MCXboxBroadcast-file")) cfg.set("geyser-addons.MCXboxBroadcast-file", "MCXboxBroadcastExtension.jar");
+            cfg.set("geyser-addons.MCXboxBroadcast-url", null);
+        } catch (Exception ignored) {
         }
     }
 
@@ -215,97 +324,126 @@ public class ConfigManager {
         scannedKeys.sort(String.CASE_INSENSITIVE_ORDER);
         finalSortedKeys.addAll(scannedKeys);
 
-        Map<String, Map<String, Object>> tempMap = new LinkedHashMap<>();
+        Map<String, Object> tempMap = new LinkedHashMap<>();
         for (String key : finalSortedKeys) {
-            tempMap.put(key, pluginsSection.getConfigurationSection(key).getValues(false));
+            ConfigurationSection sub = pluginsSection.getConfigurationSection(key);
+            if (sub != null) {
+                tempMap.put(key, new LinkedHashMap<>(sub.getValues(false)));
+            } else {
+                tempMap.put(key, pluginsSection.get(key));
+            }
         }
 
-        plugin.getConfig().set("plugins", null);
-        ConfigurationSection newSec = plugin.getConfig().createSection("plugins");
-        for (Map.Entry<String, Map<String, Object>> entry : tempMap.entrySet()) {
-            ConfigurationSection p = newSec.createSection(entry.getKey());
-            for (Map.Entry<String, Object> val : entry.getValue().entrySet()) {
-                p.set(val.getKey(), val.getValue());
+        for (String key : new ArrayList<>(pluginsSection.getKeys(false))) {
+            pluginsSection.set(key, null);
+        }
+        for (Map.Entry<String, Object> entry : tempMap.entrySet()) {
+            if (entry.getValue() instanceof Map) {
+                ConfigurationSection p = pluginsSection.createSection(entry.getKey());
+                for (Map.Entry<?, ?> val : ((Map<?, ?>) entry.getValue()).entrySet()) {
+                    p.set(String.valueOf(val.getKey()), val.getValue());
+                }
+            } else {
+                pluginsSection.set(entry.getKey(), entry.getValue());
             }
         }
     }
 
     public void saveAndFormatConfig() {
         plugin.saveConfig();
-        File configFile = new File(plugin.getDataFolder(), "config.yml");
+        plugin.savePluginsConfig();
+    }
+
+    /** File I/O off the main thread; in-memory mutation must happen before calling. */
+    public void saveAndFormatConfigAsync() {
         try {
-            List<String> lines = Files.readAllLines(configFile.toPath(), StandardCharsets.UTF_8);
-            List<String> formatted = new ArrayList<>();
-            boolean inPlugins = false;
-            boolean scannedHeaderAdded = false;
-
-            for (String line : lines) {
-                if (line.startsWith("plugins:")) {
-                    inPlugins = true;
-                    String previousNonBlank = "";
-                    String previousNonBlank2 = "";
-                    for (int i = formatted.size() - 1; i >= 0; i--) {
-                        String candidate = formatted.get(i).trim();
-                        if (!candidate.isEmpty()) {
-                            if (previousNonBlank.isEmpty()) {
-                                previousNonBlank = candidate;
-                            } else if (previousNonBlank2.isEmpty()) {
-                                previousNonBlank2 = candidate;
-                                break;
-                            }
+            IoExecutors io = plugin.getIoExecutors();
+            if (io != null) {
+                io.configPool().execute(() -> {
+                    synchronized (plugin) {
+                        try {
+                            plugin.saveConfig();
+                        } catch (Exception ignored) {
+                        }
+                        try {
+                            plugin.savePluginsConfig();
+                        } catch (Exception ignored) {
                         }
                     }
-                    boolean headerAlreadyPresent = previousNonBlank.equals("# The plugin will automatically populate this section on startup based on the plugins currently loaded on your server.")
-                            && previousNonBlank2.equals("# Below is where the plugin stores configuration for individual updates.");
-                    if (!headerAlreadyPresent) {
-                        if (!formatted.isEmpty() && !formatted.get(formatted.size() - 1).trim().isEmpty()) {
-                            formatted.add("");
-                        }
-                        formatted.add("# Below is where the plugin stores configuration for individual updates.");
-                        formatted.add("# The plugin will automatically populate this section on startup based on the plugins currently loaded on your server.");
-                    }
-                    formatted.add(line);
-                    continue;
-                } else if (!line.startsWith(" ") && !line.isEmpty()) {
-                    inPlugins = false;
-                }
-
-                String trimmed = line.trim();
-                if (inPlugins && (trimmed.equals("# ========================================== #") || trimmed.equals("#              Scanned Plugins               #"))) {
-                    continue;
-                }
-
-                if (inPlugins && line.matches("^  [a-zA-Z0-9_.-]+: *$")) {
-                    String pluginKey = line.replace(":", "").trim();
-                    boolean isExample = pluginKey.equals("Modrinth-Example") ||
-                            pluginKey.equals("PluginUpdater-WB") ||
-                            pluginKey.equals("GitHub-Example") ||
-                            pluginKey.equals("HangarPlugin-Example") ||
-                            pluginKey.equals("SpigotPlugin-Example") ||
-                            pluginKey.equals("CustomPlugin-Example");
-
-                    if (!isExample && !scannedHeaderAdded) {
-                        if (!formatted.isEmpty() && !formatted.get(formatted.size() - 1).trim().isEmpty()) {
-                            formatted.add("");
-                        }
-                        formatted.add("  # ========================================== #");
-                        formatted.add("  #              Scanned Plugins               #");
-                        formatted.add("  # ========================================== #");
-                        scannedHeaderAdded = true;
-                    } else if (!formatted.isEmpty()) {
-                        String prevLine = formatted.get(formatted.size() - 1).trim();
-                        if (!prevLine.isEmpty() && !prevLine.startsWith("#") && !prevLine.equals("plugins:")) {
-                            formatted.add("");
-                        }
-                    }
-                }
-
-                formatted.add(line);
+                });
+                return;
             }
-            Files.write(configFile.toPath(), formatted, StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            plugin.getLogger().warning("Failed to format config: " + e.getMessage());
+        } catch (Exception ignored) {
         }
+        saveAndFormatConfig();
+    }
+
+    /**
+     * A configured value always wins. Blank or absent means "detect it", which is the
+     * default because a stale version string silently filters every source down to
+     * nothing.
+     */
+    private String resolveMinecraftVersion() {
+        String configured = plugin.getConfig().getString("minecraft-version", "");
+        if (configured != null && !configured.isBlank()) return configured.trim();
+        return detectServerMinecraftVersion();
+    }
+
+    private String detectServerMinecraftVersion() {
+        try {
+            // Paper 26.1+ exposes the game version directly.
+            return Bukkit.getMinecraftVersion();
+        } catch (Throwable ignored) {
+            // Older servers: strip the build suffix from the Bukkit version, which on
+            // Paper 26.x looks like "26.3.build.42-stable-R0.1-SNAPSHOT".
+            String bukkitVersion = Bukkit.getBukkitVersion();
+            int dash = bukkitVersion.indexOf('-');
+            String base = dash > 0 ? bukkitVersion.substring(0, dash) : bukkitVersion;
+            int build = base.indexOf(".build.");
+            return build > 0 ? base.substring(0, build) : base;
+        }
+    }
+
+    public String modrinthLoaderFacet() {
+        String override = serverTypeOverride != null ? serverTypeOverride : "paper";
+        if (!override.equalsIgnoreCase("auto")) return override.toLowerCase();
+        return Bukkit.getVersion().toLowerCase().contains("paper") ? "paper" : "spigot";
+    }
+
+    public ModrinthResolver modrinthResolver() {
+        return new ModrinthResolver(plugin.getHttpClient(), modrinthLoaderFacet());
+    }
+
+    private static String formatCandidates(List<ModrinthResolver.Candidate> candidates) {
+        return ModrinthResolver.describeCandidates(candidates);
+    }
+
+    /**
+     * Turns Modrinth project IDs into readable "Name (id)" labels using the
+     * tracked plugins map. Unknown IDs pass through untouched.
+     */
+    public String describeModrinthIds(List<String> ids) {
+        if (ids == null || ids.isEmpty()) return "";
+        ConfigurationSection section = plugin.getPluginsConfig();
+        List<String> parts = new ArrayList<>();
+        for (String id : ids) {
+            String name = null;
+            if (section != null) {
+                for (String key : section.getKeys(false)) {
+                    if ("MODRINTH".equalsIgnoreCase(section.getString(key + ".type", ""))
+                            && id.equals(section.getString(key + ".project-id", ""))) {
+                        name = key;
+                        break;
+                    }
+                }
+            }
+            parts.add(name != null ? name + " (" + id + ")" : id);
+        }
+        return String.join(", ", parts);
+    }
+
+    public String getGitHubToken() {
+        return plugin.getConfig().getString("github-token", "");
     }
 
     public String getMinecraftVersion() {
@@ -326,7 +464,7 @@ public class ConfigManager {
     }
 
     public String getPluginServerType(String pluginName) {
-        ConfigurationSection pSec = plugin.getConfig().getConfigurationSection("plugins." + pluginName);
+        ConfigurationSection pSec = plugin.getPluginsConfig().getConfigurationSection(pluginName);
         String configured = pSec != null ? pSec.getString("server-type", null) : null;
         if (configured != null && !configured.isBlank()) {
             return configured;
@@ -335,12 +473,12 @@ public class ConfigManager {
     }
 
     public String getPluginSourceType(String pluginName) {
-        ConfigurationSection pSec = plugin.getConfig().getConfigurationSection("plugins." + pluginName);
+        ConfigurationSection pSec = plugin.getPluginsConfig().getConfigurationSection(pluginName);
         return pSec != null ? pSec.getString("type", "MODRINTH") : "MODRINTH";
     }
 
     public String resolvePluginName(String input) {
-        ConfigurationSection pSec = plugin.getConfig().getConfigurationSection("plugins");
+        ConfigurationSection pSec = plugin.getPluginsConfig();
         if (pSec == null) return null;
         if (pSec.contains(input)) return input;
         return pSec.getKeys(false).stream().filter(k -> k.equalsIgnoreCase(input)).findFirst().orElse(null);
@@ -351,7 +489,7 @@ public class ConfigManager {
             return getTrackedChannelsForAllPlugins();
         }
 
-        ConfigurationSection ts = plugin.getConfig().getConfigurationSection("plugins." + resolvedName);
+        ConfigurationSection ts = plugin.getPluginsConfig().getConfigurationSection(resolvedName);
         List<String> currentTracked = ts != null ? ts.getStringList("allowed-release-types") : Collections.emptyList();
         if (currentTracked == null || currentTracked.isEmpty()) {
             return Collections.singletonList("release");
@@ -360,7 +498,7 @@ public class ConfigManager {
     }
 
     private List<String> getTrackedChannelsForAllPlugins() {
-        ConfigurationSection pluginsSec = plugin.getConfig().getConfigurationSection("plugins");
+        ConfigurationSection pluginsSec = plugin.getPluginsConfig();
         if (pluginsSec == null) {
             return Collections.singletonList("release");
         }
@@ -391,33 +529,35 @@ public class ConfigManager {
     }
 
     public List<String> getEnabledPlugins() {
-        ConfigurationSection pSec = plugin.getConfig().getConfigurationSection("plugins");
+        ConfigurationSection pSec = plugin.getPluginsConfig();
         if (pSec == null) return Collections.emptyList();
         return pSec.getKeys(false).stream()
                 .filter(k -> pSec.getBoolean(k + ".enabled", true))
+                .filter(k -> pSec.getBoolean(k + ".installed", true))
                 .collect(Collectors.toList());
     }
 
     public void setPluginIdConfig(CommandSender sender, String pluginName, String source, String projectId) {
         String type = source.toUpperCase(Locale.ROOT);
         String resolvedId = extractIdFromInput(type, projectId);
-        String pluginPath = "plugins." + pluginName;
+        String pluginPath = pluginName;
 
-        plugin.getConfig().set(pluginPath + ".type", type);
-        plugin.getConfig().set(pluginPath + ".project-id", null);
-        plugin.getConfig().set(pluginPath + ".github-repo", null);
-        plugin.getConfig().set(pluginPath + ".custom-url", null);
+        plugin.getPluginsConfig().set(pluginPath + ".resolve-failed", null);
+        plugin.getPluginsConfig().set(pluginPath + ".type", type);
+        plugin.getPluginsConfig().set(pluginPath + ".project-id", null);
+        plugin.getPluginsConfig().set(pluginPath + ".github-repo", null);
+        plugin.getPluginsConfig().set(pluginPath + ".custom-url", null);
 
         if (type.equals("MODRINTH") || type.equals("HANGAR") || type.equals("SPIGOT")) {
-            plugin.getConfig().set(pluginPath + ".project-id", resolvedId);
+            plugin.getPluginsConfig().set(pluginPath + ".project-id", resolvedId);
             saveAndFormatConfig();
             plugin.sendMsg(sender, ChatColor.GREEN + "Set " + pluginName + " to " + type + " with ID " + resolvedId + ".");
         } else if (type.equals("GITHUB")) {
-            plugin.getConfig().set(pluginPath + ".github-repo", resolvedId);
+            plugin.getPluginsConfig().set(pluginPath + ".github-repo", resolvedId);
             saveAndFormatConfig();
             plugin.sendMsg(sender, ChatColor.GREEN + "Set " + pluginName + " to GitHub with repo " + resolvedId + ".");
         } else if (type.equals("CUSTOM")) {
-            plugin.getConfig().set(pluginPath + ".custom-url", resolvedId);
+            plugin.getPluginsConfig().set(pluginPath + ".custom-url", resolvedId);
             saveAndFormatConfig();
             plugin.sendMsg(sender, ChatColor.GREEN + "Set " + pluginName + " to Custom with URL " + resolvedId + ".");
         } else {
@@ -557,10 +697,7 @@ public class ConfigManager {
                 }
             }
 
-            ConfigurationSection pluginsSection = plugin.getConfig().getConfigurationSection("plugins");
-            if (pluginsSection == null) {
-                pluginsSection = plugin.getConfig().createSection("plugins");
-            }
+            ConfigurationSection pluginsSection = plugin.getPluginsConfig();
             if (!pluginsSection.contains(pluginName)) {
                 ConfigurationSection pSec = pluginsSection.createSection(pluginName);
                 pSec.set("enabled", true);
@@ -574,10 +711,10 @@ public class ConfigManager {
                 }
             }
 
-            plugin.getConfig().set("plugins." + pluginName + ".type", type);
-            plugin.getConfig().set("plugins." + pluginName + ".project-id", type.equals("CUSTOM") || type.equals("GITHUB") ? null : sourceValue);
-            plugin.getConfig().set("plugins." + pluginName + ".github-repo", type.equals("GITHUB") ? sourceValue : null);
-            plugin.getConfig().set("plugins." + pluginName + ".custom-url", type.equals("CUSTOM") ? sourceValue : null);
+            plugin.getPluginsConfig().set(pluginName + ".type", type);
+            plugin.getPluginsConfig().set(pluginName + ".project-id", type.equals("CUSTOM") || type.equals("GITHUB") ? null : sourceValue);
+            plugin.getPluginsConfig().set(pluginName + ".github-repo", type.equals("GITHUB") ? sourceValue : null);
+            plugin.getPluginsConfig().set(pluginName + ".custom-url", type.equals("CUSTOM") ? sourceValue : null);
             saveAndFormatConfig();
             plugin.sendMsg(sender, ChatColor.GREEN + "Added plugin config for " + pluginName + " using source " + type + ".");
             if (!type.equals("CUSTOM")) {
@@ -611,7 +748,7 @@ public class ConfigManager {
 
     private String fetchModrinthProjectName(String projectId) throws Exception {
         String url = "https://api.modrinth.com/v2/project/" + URLEncoder.encode(projectId, StandardCharsets.UTF_8.toString());
-        HttpRequest request = HttpRequest.newBuilder().uri(URI.create(url)).header("User-Agent", "PluginUpdater-WB").build();
+        HttpRequest request = HttpRequest.newBuilder().timeout(java.time.Duration.ofSeconds(15)).uri(URI.create(url)).header("User-Agent", "PluginUpdater-WB").build();
         HttpResponse<String> response = plugin.getHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() != 200) return null;
         JsonObject json = JsonParser.parseString(response.body()).getAsJsonObject();
@@ -622,7 +759,7 @@ public class ConfigManager {
 
     private String fetchSpigotResourceName(String resourceId) throws Exception {
         String url = "https://api.spiget.org/v2/resources/" + URLEncoder.encode(resourceId, StandardCharsets.UTF_8.toString());
-        HttpRequest request = HttpRequest.newBuilder().uri(URI.create(url)).header("User-Agent", "PluginUpdater-WB").build();
+        HttpRequest request = HttpRequest.newBuilder().timeout(java.time.Duration.ofSeconds(15)).uri(URI.create(url)).header("User-Agent", "PluginUpdater-WB").build();
         HttpResponse<String> response = plugin.getHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() != 200) return null;
         JsonObject json = JsonParser.parseString(response.body()).getAsJsonObject();
@@ -631,8 +768,12 @@ public class ConfigManager {
 
     private String fetchGitHubRepoName(String repo) throws Exception {
         String url = "https://api.github.com/repos/" + repo;
-        HttpRequest request = HttpRequest.newBuilder().uri(URI.create(url)).header("User-Agent", "PluginUpdater-WB").build();
-        HttpResponse<String> response = plugin.getHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+        HttpRequest.Builder builder = HttpRequest.newBuilder().timeout(java.time.Duration.ofSeconds(15)).uri(URI.create(url)).header("User-Agent", "PluginUpdater-WB");
+        String token = getGitHubToken();
+        if (token != null && !token.isBlank()) {
+            builder.header("Authorization", "Bearer " + token.trim());
+        }
+        HttpResponse<String> response = plugin.getHttpClient().send(builder.build(), HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() != 200) return null;
         JsonObject json = JsonParser.parseString(response.body()).getAsJsonObject();
         if (json.has("name")) return json.get("name").getAsString();
@@ -642,7 +783,7 @@ public class ConfigManager {
 
     private String fetchHangarProjectName(String projectId) throws Exception {
         String url = "https://hangar.papermc.io/api/v1/projects/" + URLEncoder.encode(projectId, StandardCharsets.UTF_8.toString());
-        HttpRequest request = HttpRequest.newBuilder().uri(URI.create(url)).header("User-Agent", "PluginUpdater-WB").build();
+        HttpRequest request = HttpRequest.newBuilder().timeout(java.time.Duration.ofSeconds(15)).uri(URI.create(url)).header("User-Agent", "PluginUpdater-WB").build();
         HttpResponse<String> response = plugin.getHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() != 200) return null;
         JsonObject json = JsonParser.parseString(response.body()).getAsJsonObject();
@@ -659,7 +800,7 @@ public class ConfigManager {
             return;
         }
 
-        plugin.getConfig().set("plugins." + resolvedName + ".enabled", enabled);
+        plugin.getPluginsConfig().set(resolvedName + ".enabled", enabled);
         saveAndFormatConfig();
         plugin.sendMsg(sender, ChatColor.GREEN + resolvedName + " is now " + (enabled ? "ENABLED" : "DISABLED") + " for updates.");
 
@@ -683,67 +824,33 @@ public class ConfigManager {
         return "AUTO (" + detected + ")";
     }
 
-    public String getRealModrinthId(String pluginName) throws Exception {
-        String slug = pluginName.toLowerCase().replace(" ", "-");
-        String exactUrl = "https://api.modrinth.com/v2/project/" + URLEncoder.encode(slug, StandardCharsets.UTF_8.toString());
+    public static final class SpigotCandidate {
+        public final String id;
+        public final String name;
 
-        HttpRequest exactRequest = HttpRequest.newBuilder()
-                .uri(URI.create(exactUrl))
-                .header("User-Agent", "PluginUpdater-WB")
-                .build();
-
-        HttpResponse<String> exactResponse = HttpClient.newHttpClient().send(exactRequest, HttpResponse.BodyHandlers.ofString());
-
-        if (exactResponse.statusCode() == 200) {
-            JsonObject json = JsonParser.parseString(exactResponse.body()).getAsJsonObject();
-            if (json.has("id")) {
-                return json.get("id").getAsString();
-            }
+        public SpigotCandidate(String id, String name) {
+            this.id = id;
+            this.name = name;
         }
+    }
 
-        String searchUrl = "https://api.modrinth.com/v2/search?query="
-                + URLEncoder.encode(pluginName, StandardCharsets.UTF_8.toString())
-                + "&limit=5";
+    private JsonArray searchSpigotResources(String pluginName) throws Exception {
+        String query = URLEncoder.encode(pluginName, StandardCharsets.UTF_8.toString());
+        String searchUrl = "https://api.spiget.org/v2/search/resources/" + query + "?size=10";
 
-        HttpRequest searchRequest = HttpRequest.newBuilder()
+        HttpRequest searchRequest = HttpRequest.newBuilder().timeout(java.time.Duration.ofSeconds(15))
                 .uri(URI.create(searchUrl))
                 .header("User-Agent", "PluginUpdater-WB")
                 .build();
 
-        HttpResponse<String> searchResponse = HttpClient.newHttpClient().send(searchRequest, HttpResponse.BodyHandlers.ofString());
-
-        if (searchResponse.statusCode() == 200) {
-            JsonObject json = JsonParser.parseString(searchResponse.body()).getAsJsonObject();
-            JsonArray hits = json.getAsJsonArray("hits");
-
-            if (hits.size() > 0) {
-                for (JsonElement element : hits) {
-                    JsonObject hit = element.getAsJsonObject();
-                    String hitTitle = hit.get("title").getAsString();
-                    String hitSlug = hit.get("slug").getAsString();
-
-                    if (hitTitle.equalsIgnoreCase(pluginName) || hitSlug.equalsIgnoreCase(slug) || hitSlug.equalsIgnoreCase(pluginName)) {
-                        return hit.get("project_id").getAsString();
-                    }
-                }
-            }
-        }
-        return null;
+        HttpResponse<String> searchResponse = plugin.getHttpClient().send(searchRequest, HttpResponse.BodyHandlers.ofString());
+        if (searchResponse.statusCode() != 200) return null;
+        return JsonParser.parseString(searchResponse.body()).getAsJsonArray();
     }
 
     public String getRealSpigotId(String pluginName) throws Exception {
-        String query = URLEncoder.encode(pluginName, StandardCharsets.UTF_8.toString());
-        String searchUrl = "https://api.spiget.org/v2/search/resources/" + query + "?size=5";
-
-        HttpRequest searchRequest = HttpRequest.newBuilder()
-                .uri(URI.create(searchUrl))
-                .header("User-Agent", "PluginUpdater-WB")
-                .build();
-
-        HttpResponse<String> searchResponse = HttpClient.newHttpClient().send(searchRequest, HttpResponse.BodyHandlers.ofString());
-        if (searchResponse.statusCode() != 200) return null;
-
-        JsonArray results = JsonParser.parseString(searchResponse.body()).getAsJsonArray();
+        JsonArray results = searchSpigotResources(pluginName);
+        if (results == null) return null;
         String normalizedName = pluginName.toLowerCase().replace(" ", "");
 
         for (JsonElement element : results) {
@@ -758,5 +865,49 @@ public class ConfigManager {
         }
 
         return null;
+    }
+
+    static boolean spigotCloseMatch(String normQuery, String normResource) {
+        if (normQuery.isEmpty() || normResource.isEmpty() || normQuery.equals(normResource)) return false;
+        return normResource.contains(normQuery) || normQuery.contains(normResource);
+    }
+
+    /**
+     * Inexact Spiget matches for when the exact lookup fails. Never auto-applied;
+     * shown to the admin so a human picks the right resource.
+     */
+    public List<SpigotCandidate> spigotCandidates(String pluginName) {
+        List<SpigotCandidate> out = new ArrayList<>();
+        try {
+            JsonArray results = searchSpigotResources(pluginName);
+            if (results == null) return out;
+            String norm = pluginName.toLowerCase().replaceAll("[^a-z0-9]", "");
+            for (JsonElement element : results) {
+                JsonObject resource = element.getAsJsonObject();
+                if (!resource.has("name") || !resource.has("id")) continue;
+                String resourceName = resource.get("name").getAsString();
+                String resourceNorm = resourceName.toLowerCase().replaceAll("[^a-z0-9]", "");
+                if (spigotCloseMatch(norm, resourceNorm)) {
+                    out.add(new SpigotCandidate(resource.get("id").getAsString(), resourceName));
+                    if (out.size() >= 5) break;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return out;
+    }
+
+    public static String describeSpigotCandidates(List<SpigotCandidate> candidates) {
+        if (candidates == null || candidates.isEmpty()) return "";
+        StringBuilder out = new StringBuilder(" Spigot close matches:");
+        for (SpigotCandidate candidate : candidates) {
+            out.append(" '").append(candidate.name).append("' (").append(candidate.id).append(")");
+        }
+        return out.toString();
+    }
+
+    public static String privateJarHint(String pluginName) {
+        return "If '" + pluginName + "' is a private/custom jar, point it at a URL: /upd plugin id " + pluginName
+                + " Custom <url> - or stop tracking it: /upd plugin toggle " + pluginName + " false";
     }
 }
