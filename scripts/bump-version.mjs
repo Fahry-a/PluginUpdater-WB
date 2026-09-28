@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Maps a pure semver (from semantic-release, e.g. 1.0.6) onto this project's
-// version scheme: pom.xml and README keep the `26.2-` Minecraft prefix
-// (e.g. 26.2-1.0.6), package.json tracks the pure semver.
+// version scheme: pom.xml uses the `26.2-` Minecraft/API prefix
+// (e.g. 26.2-1.0.6), while package.json tracks the pure semver.
+// README may contain an embedded full version, but it is not required.
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const version = process.argv[2];
@@ -18,8 +19,12 @@ writeFileSync('pom.xml', pomNext);
 
 const readme = readFileSync('README.md', 'utf8');
 const readmeNext = readme.replace(/26\.2-\d+\.\d+\.\d+/g, full);
-if (readmeNext === readme) throw new Error('bump-version: README.md version pattern not found');
-writeFileSync('README.md', readmeNext);
+if (readmeNext !== readme) {
+  writeFileSync('README.md', readmeNext);
+  console.log(`bump-version: updated README version to ${full}`);
+} else {
+  console.log('bump-version: README.md has no embedded full plugin version; leaving it unchanged');
+}
 
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
 pkg.version = version;
