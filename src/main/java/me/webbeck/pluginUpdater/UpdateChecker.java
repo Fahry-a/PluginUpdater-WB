@@ -590,15 +590,29 @@ public class UpdateChecker {
         plugin.getIoExecutors().checkPool().execute(() -> {
             try {
                 String current = plugin.getDescription().getVersion();
+                String currentReleaseVersion = extractSelfReleaseVersion(current);
                 UpdateInfo info = checkGitHub("PluginUpdater-WB", "Fahry-a/PluginUpdater-WB", current,
                         Collections.singletonList("release"), null);
-                if (info == null || !PluginUpdaterUtils.isNewerThan(current, info.newVersion)) {
-                    plugin.sendMsg(sender, ChatColor.GREEN + "PluginUpdater-WB is up to date (" + current + ").");
+
+                if (info == null) {
+                    plugin.sendMsg(sender, ChatColor.GREEN + "PluginUpdater-WB is up to date (" + currentReleaseVersion + ").");
+                    return;
+                }
+
+                String remoteReleaseVersion = extractSelfReleaseVersion(info.newVersion);
+                if (currentReleaseVersion == null || remoteReleaseVersion == null) {
+                    plugin.sendMsg(sender, ChatColor.YELLOW + "Could not compare self-update versions: "
+                            + current + " -> " + info.newVersion);
+                    return;
+                }
+
+                if (!PluginUpdaterUtils.isNewerThan(currentReleaseVersion, remoteReleaseVersion)) {
+                    plugin.sendMsg(sender, ChatColor.GREEN + "PluginUpdater-WB is up to date (" + currentReleaseVersion + ").");
                     return;
                 }
 
                 plugin.sendMsg(sender, ChatColor.YELLOW + "PluginUpdater-WB update available: "
-                        + current + " -> " + info.newVersion);
+                        + currentReleaseVersion + " -> " + remoteReleaseVersion);
                 plugin.getPendingUpdates().put(info.pluginName.toLowerCase(Locale.ROOT), info);
 
                 if (autoDownload && plugin.getConfig().getBoolean("self-update.auto-download", true)) {
@@ -615,6 +629,18 @@ public class UpdateChecker {
                         + (e.getMessage() != null ? e.getMessage() : e));
             }
         });
+    }
+
+    private static String extractSelfReleaseVersion(String version) {
+        if (version == null) return null;
+        String normalized = version.trim();
+        if (normalized.startsWith("v") || normalized.startsWith("V")) {
+            normalized = normalized.substring(1);
+        }
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("(?:^|[-+])(\\d+\\.\\d+\\.\\d+)(?:[-+].*)?$")
+                .matcher(normalized);
+        return matcher.find() ? matcher.group(1) : null;
     }
 
     UpdateInfo checkGitHub(String pluginName, String repo, String currentVer, List<String> allowedTypes) throws Exception {
