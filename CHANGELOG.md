@@ -1,3 +1,14 @@
+# [1.3.0](https://github.com/Fahry-a/PluginUpdater-WB/compare/v1.2.0...v1.3.0) (2026-09-28)
+
+
+### Features
+
+* add /upd self command ([1f978e6](https://github.com/Fahry-a/PluginUpdater-WB/commit/1f978e6a19bdd6f994540b28869a68b918480753))
+* add dedicated self-update release checker ([6c9e87e](https://github.com/Fahry-a/PluginUpdater-WB/commit/6c9e87e97363e3050f40c06d343d350728b4d466))
+* check self-update on startup ([5e403c4](https://github.com/Fahry-a/PluginUpdater-WB/commit/5e403c48dfd1aa00994dff514143b97c297cbefb))
+* expose self-update command help and completion ([c2384d7](https://github.com/Fahry-a/PluginUpdater-WB/commit/c2384d72fe30e086f0503f88a3ec4ff7a6f442b4))
+* schedule dedicated self-update checks ([ffc5607](https://github.com/Fahry-a/PluginUpdater-WB/commit/ffc560799be77987418271fd42a1d7faed13528a))
+
 # [1.2.0](https://github.com/Fahry-a/PluginUpdater-WB/compare/v1.1.0...v1.2.0) (2026-09-28)
 
 
