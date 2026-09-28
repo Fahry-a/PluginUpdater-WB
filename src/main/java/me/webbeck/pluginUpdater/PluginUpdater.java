@@ -50,6 +50,7 @@ public class PluginUpdater extends JavaPlugin implements Listener {
         saveDefaultConfig();
         getConfig().options().header("PluginUpdater-WB settings.\nEdit while the server is stopped, then run /upd reload (or restart).");
         initPluginsConfig();
+        ensureSelfTrackingConfig();
 
         configManager = new ConfigManager(this);
         updateChecker = new UpdateChecker(this, configManager, httpClient);
@@ -75,6 +76,8 @@ public class PluginUpdater extends JavaPlugin implements Listener {
             configManager.syncConfig();
             updateChecker.runUpdateCheck(Bukkit.getConsoleSender(), false, null);
         }, 1L);
+
+        scheduleAutomaticSelfChecks();
     }
 
     @Override
@@ -268,6 +271,77 @@ public class PluginUpdater extends JavaPlugin implements Listener {
         } else {
             reloadPluginsConfig();
         }
+    }
+
+    /**
+     * Keeps PluginUpdater-WB itself in the normal plugin tracking pipeline.
+     * The repository and release format are fixed to this fork so a new GitHub
+     * Release can be discovered without requiring a manual /upd plugin command.
+     */
+    private void ensureSelfTrackingConfig() {
+        String pluginName = getDescription().getName();
+        ConfigurationSection section = pluginsConfig.getConfigurationSection(pluginName);
+        if (section == null) {
+            section = pluginsConfig.createSection(pluginName);
+        }
+
+        boolean enabled = getConfig().getBoolean("self-update.enabled", true);
+        section.set("enabled", enabled);
+        section.set("installed", true);
+        section.set("type", "GITHUB");
+        section.set("github-repo", "Fahry-a/PluginUpdater-WB");
+        section.set("project-id", null);
+        section.set("custom-url", null);
+        section.set("allowed-release-types", java.util.Collections.singletonList("release"));
+
+        String currentVersion = getDescription().getVersion();
+        section.set("current-version", currentVersion);
+
+        savePluginsConfig();
+    }
+
+    /**
+     * Automatically checks for the updater itself at a configurable interval.
+     * Only the updater's own pending update is auto-downloaded; other plugins
+     * still require their normal update command.
+     */
+    private void scheduleAutomaticSelfChecks() {
+        long minutes = getConfig().getLong("self-update.check-interval-minutes", 360L);
+        if (minutes <= 0L) return;
+
+        long ticks;
+        try {
+            ticks = Math.multiplyExact(minutes, 60L * 20L);
+        } catch (ArithmeticException e) {
+            getLogger().warning("self-update.check-interval-minutes is too large; automatic checks disabled.");
+            return;
+        }
+
+        getServer().getScheduler().runTaskTimer(this, () -> {
+            if (!getConfig().getBoolean("self-update.enabled", true)) return;
+            updateChecker.runUpdateCheck(Bukkit.getConsoleSender(), false, null);
+        }, ticks, ticks);
+    }
+
+    /**
+     * Called after an update check completes. If a newer official GitHub
+     * release exists, stage it through the normal hardened downloader.
+     * Paper applies files in the update folder on the next server restart.
+     */
+    public void autoApplySelfUpdate() {
+        if (!getConfig().getBoolean("self-update.enabled", true)
+                || !getConfig().getBoolean("self-update.auto-download", true)) {
+            return;
+        }
+
+        String pluginName = getDescription().getName();
+        UpdateInfo info = pendingUpdates.get(pluginName.toLowerCase());
+        if (info == null) return;
+
+        getLogger().info("Automatic self-update available: " + info.oldVersion + " -> " + info.newVersion
+                + ". Downloading to Paper's update folder.");
+
+        updateDownloader.applyUpdates(Bukkit.getConsoleSender(), java.util.Collections.singletonList(info));
     }
 
     public void appendPendingDeletion(String entry) {
