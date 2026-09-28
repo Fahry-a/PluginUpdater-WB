@@ -4,7 +4,7 @@
 >
 > Fork of [web-beck/PluginUpdater-WB](https://github.com/web-beck/PluginUpdater-WB) — all credit for the original plugin goes to **WebBeck**. See [Credits](#-credits).
 
-**Version:** `26.2-1.1.0` &nbsp;|&nbsp; **Minecraft:** `26.2` &nbsp;|&nbsp; **API Version:** `26.2` &nbsp;|&nbsp; **Java:** 25 &nbsp;|&nbsp; **Original Author:** WebBeck &nbsp;|&nbsp; **Fork Maintainer:** Fahry-a
+**Version:** `26.2-1.2.0` &nbsp;|&nbsp; **Minecraft:** `26.2` &nbsp;|&nbsp; **API Version:** `26.2` &nbsp;|&nbsp; **Java:** 25 &nbsp;|&nbsp; **Original Author:** WebBeck &nbsp;|&nbsp; **Fork Maintainer:** Fahry-a
 
 ---
 
@@ -34,7 +34,7 @@ PluginUpdater-WB automates keeping your Paper server's plugins up to date. It ch
 
 ## 🚀 Installation
 
-1. Download `PluginUpdater-WB-26.2-1.1.0.jar` and drop it into your server's `plugins/` folder.
+1. Download `PluginUpdater-WB-26.2-1.2.0.jar` and drop it into your server's `plugins/` folder.
 2. Start (or restart) your server. The plugin will generate `config.yml` and auto-populate it with entries for every plugin currently loaded.
 3. Edit `config.yml` to enable or tune tracking for each plugin (see [Configuration](#%EF%B8%8F-configuration) below).
 4. Run `/upd reload` to apply changes without restarting.

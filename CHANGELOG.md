@@ -1,3 +1,16 @@
+# [1.2.0](https://github.com/Fahry-a/PluginUpdater-WB/compare/v1.1.0...v1.2.0) (2026-09-28)
+
+
+### Bug Fixes
+
+* lock Geyser tracking to Modrinth source ([8525084](https://github.com/Fahry-a/PluginUpdater-WB/commit/852508438cc31c9c7750b68ccefdca7d9a617c6f))
+* validate Geyser addon temp downloads as jars ([e794974](https://github.com/Fahry-a/PluginUpdater-WB/commit/e794974bac2afc915c466b705e55943be830c2a6))
+
+
+### Features
+
+* manage Geyser through Modrinth in geyser command ([e2d36f5](https://github.com/Fahry-a/PluginUpdater-WB/commit/e2d36f5101b1c09109bcec525d05d72d44dbbdc0))
+
 # [1.1.0](https://github.com/Fahry-a/PluginUpdater-WB/compare/v1.0.0...v1.1.0) (2026-09-28)
 
 
