@@ -708,7 +708,8 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
         sender.sendMessage(Component.text("=== PluginUpdater-WB Help ===", NamedTextColor.GOLD));
         sendHelpLine(sender, "/upd help", "Shows this help menu.");
         sendHelpLine(sender, "/upd -v", "Displays the PluginUpdater version.");
-        sendHelpLine(sender, "/upd check", "Checks all plugins for updates asynchronously.");
+        sendHelpLine(sender, "/upd check", "Checks all tracked plugins for updates asynchronously.");
+        sendHelpLine(sender, "/upd self [check|update|status]", "Checks PluginUpdater-WB GitHub Releases and stages its own update.");
         sendHelpLine(sender, "/upd run [plugin]", "Downloads and stages pending updates.");
         sendHelpLine(sender, "/upd staged", "Inspects the update folder without restarting.");
         sendHelpLine(sender, "/upd errors", "Lists plugins whose source could not be checked.");
@@ -1014,10 +1015,13 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
         List<String> completions = new ArrayList<>();
 
         if (args.length == 1) {
-            List<String> subs = Arrays.asList("check", "run", "list", "staged", "errors", "reload", "plugin", "confirm", "help", "-v");
+            List<String> subs = Arrays.asList("check", "self", "run", "list", "staged", "errors", "reload", "plugin", "confirm", "help", "-v");
             completions.addAll(subs.stream().filter(s -> s.startsWith(args[0].toLowerCase())).collect(Collectors.toList()));
         } else if (args.length == 2) {
-            if (args[0].equalsIgnoreCase("run")) {
+            if (args[0].equalsIgnoreCase("self")) {
+                List<String> selfSubs = Arrays.asList("check", "update", "status");
+                completions.addAll(selfSubs.stream().filter(s -> s.startsWith(args[1].toLowerCase())).collect(Collectors.toList()));
+            } else if (args[0].equalsIgnoreCase("run")) {
                 completions.addAll(plugin.getPendingUpdates().keySet().stream().filter(s -> s.startsWith(args[1].toLowerCase())).collect(Collectors.toList()));
             } else if (args[0].equalsIgnoreCase("list")) {
                 List<String> mods = Arrays.asList("all", "versions", "enabled", "disabled", "pending");
