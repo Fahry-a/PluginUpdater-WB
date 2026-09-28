@@ -39,7 +39,7 @@ public final class JarHasher {
     // Bounded LRU: eldest entry evicted once size exceeds MAX_ENTRIES.
     // Guarded by its own monitor; never grows without bound.
     private static final java.util.Map<String, Entry> CACHE =
-            new java.util.LinkedHashMap<>(64, 0.75f, true) {
+            new java.util.LinkedHashMap<String, Entry>(64, 0.75f, true) {
                 @Override
                 protected boolean removeEldestEntry(java.util.Map.Entry<String, Entry> eldest) {
                     return size() > MAX_ENTRIES;
