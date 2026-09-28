@@ -177,6 +177,7 @@ public class UpdateChecker {
                         }
                     }
                 }
+                plugin.autoApplySelfUpdate();
             });
             } finally {
                 lock.set(false);
