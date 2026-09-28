@@ -1,3 +1,10 @@
+## [1.3.2](https://github.com/Fahry-a/PluginUpdater-WB/compare/v1.3.1...v1.3.2) (2026-09-28)
+
+
+### Bug Fixes
+
+* compare self-update using plugin semver ([351de0f](https://github.com/Fahry-a/PluginUpdater-WB/commit/351de0f3a941e15ed823e0f17e60620bddfa7470))
+
 ## [1.3.1](https://github.com/Fahry-a/PluginUpdater-WB/compare/v1.3.0...v1.3.1) (2026-09-28)
 
 
