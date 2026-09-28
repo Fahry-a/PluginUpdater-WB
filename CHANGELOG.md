@@ -1,3 +1,12 @@
+# [1.1.0](https://github.com/Fahry-a/PluginUpdater-WB/compare/v1.0.0...v1.1.0) (2026-09-28)
+
+
+### Features
+
+* add automatic self-update tracking ([681e793](https://github.com/Fahry-a/PluginUpdater-WB/commit/681e7933882a8dfde17ac0b2726c7cbd50769cf2))
+* configure automatic self-update ([be362e6](https://github.com/Fahry-a/PluginUpdater-WB/commit/be362e6353df024f0bd0b7b4a2d34b12a1b5bb40))
+* trigger automatic self-update after checks ([9cbb59c](https://github.com/Fahry-a/PluginUpdater-WB/commit/9cbb59c43972059921d83484ee652c550d5a631b))
+
 # 1.0.0 (2026-09-28)
 
 

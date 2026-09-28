@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>me.webbeck.pluginupdater</groupId>
     <artifactId>PluginUpdater-WB</artifactId>
-    <version>26.2-1.0.0</version>
+    <version>26.2-1.1.0</version>
     <packaging>jar</packaging>
     <name>PluginUpdater-WB</name>
     <description>Highly advanced, fully asynchronous plugin manager and updater.</description>
