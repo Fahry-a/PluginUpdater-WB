@@ -412,8 +412,8 @@ public class UpdateChecker {
         if (versions.size() == 0 && gameVersion != null && !gameVersion.isBlank()) {
             JsonArray fallback = requestModrinthVersions(pluginName, projectId, loadersStr, null);
             if (fallback.size() > 0) {
-                plugin.getLogger().info("Modrinth " + projectId + " has no build for Minecraft " + gameVersion
-                        + " - falling back to the latest available release.");
+                plugin.getLogger().info(pluginName + " [Modrinth: " + projectId + "] has no build for Minecraft " + gameVersion
+                        + " - falling back to the latest matching build.");
                 versions = fallback;
             }
         }
