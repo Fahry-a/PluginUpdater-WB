@@ -483,7 +483,7 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
                 if (args.length < 5) return;
                 String addon = args[3];
                 if (addon.equalsIgnoreCase("Geyser")) {
-                    plugin.sendMsg(sender, ChatColor.YELLOW + "Geyser is tracked as a regular plugin via Modrinth - use /upd plugin toggle instead.");
+                    plugin.sendMsg(sender, ChatColor.YELLOW + "Geyser is managed here and its source is fixed to Modrinth.");
                     return;
                 }
                 boolean state = Boolean.parseBoolean(args[4]);
@@ -495,7 +495,9 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
             case "update":
                 if (args.length < 4) return;
                 if (args[3].equalsIgnoreCase("all")) {
-                    geyserManager.downloadAllGeyserAddons(sender, true);
+                    updateGeyserAndAddons(sender, true);
+                } else if (args[3].equalsIgnoreCase("Geyser")) {
+                    updateGeyser(sender, true);
                 } else {
                     geyserManager.downloadGeyserAddon(sender, args[3], true);
                 }
@@ -504,11 +506,57 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
                 if (args.length < 4) return;
                 if (args[3].equalsIgnoreCase("all")) {
                     geyserManager.downloadAllGeyserAddons(sender, false);
+                } else if (args[3].equalsIgnoreCase("Geyser")) {
+                    updateGeyser(sender, false);
                 } else {
                     geyserManager.downloadGeyserAddon(sender, args[3], false);
                 }
                 break;
         }
+    }
+
+    private void updateGeyser(CommandSender sender, boolean force) {
+        final String name = "Geyser";
+        final ConfigurationSection sec = plugin.getPluginsConfig().getConfigurationSection(name);
+        if (sec == null) {
+            plugin.sendMsg(sender, ChatColor.RED + "Geyser is not tracked in plugins.yml yet. Run /upd reload with Geyser installed.");
+            return;
+        }
+
+        final String projectId = ConfigManager.GEYSER_MODRINTH_ID;
+        final org.bukkit.plugin.Plugin loaded = Bukkit.getPluginManager().getPlugin(name);
+        final String currentVersion = loaded != null
+                ? loaded.getDescription().getVersion()
+                : sec.getString("current-version", "0.0.0");
+        final List<String> channels = sec.getStringList("allowed-release-types").isEmpty()
+                ? Collections.singletonList("beta")
+                : sec.getStringList("allowed-release-types");
+        final String serverType = configManager.getPluginServerType(name);
+        final String serverVersion = configManager.getMinecraftVersion();
+
+        plugin.sendMsg(sender, ChatColor.AQUA + (force ? "Checking latest Geyser from Modrinth..." : "Checking Geyser from Modrinth..."));
+        Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+            try {
+                UpdateInfo info = updateChecker.checkModrinth(name, projectId, currentVersion,
+                        channels, serverType, Bukkit.getVersion().toLowerCase(), false);
+                if (info == null) {
+                    plugin.sendMsg(sender, ChatColor.GREEN + "Geyser is already up to date.");
+                    return;
+                }
+                if (!force && info.newVersion.equals(currentVersion)) {
+                    plugin.sendMsg(sender, ChatColor.GREEN + "Geyser is already up to date (" + currentVersion + ").");
+                    return;
+                }
+                updateDownloader.applyUpdates(sender, Collections.singletonList(info));
+            } catch (Exception e) {
+                plugin.sendMsg(sender, ChatColor.RED + "Failed to check Geyser on Modrinth: " + e.getMessage());
+            }
+        });
+    }
+
+    private void updateGeyserAndAddons(CommandSender sender, boolean force) {
+        updateGeyser(sender, force);
+        geyserManager.downloadAllGeyserAddons(sender, force);
     }
 
     private void handleRollback(CommandSender sender, String[] args) {
@@ -998,7 +1046,7 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
                         List<String> addons = Arrays.asList("Floodgate", "MCXboxBroadcast");
                         completions.addAll(addons.stream().filter(s -> s.toLowerCase().startsWith(args[3].toLowerCase())).collect(Collectors.toList()));
                     } else if (args[2].equalsIgnoreCase("update") || args[2].equalsIgnoreCase("download")) {
-                        List<String> addons = Arrays.asList("all", "Floodgate", "MCXboxBroadcast");
+                        List<String> addons = Arrays.asList("all", "Geyser", "Floodgate", "MCXboxBroadcast");
                         completions.addAll(addons.stream().filter(s -> s.toLowerCase().startsWith(args[3].toLowerCase())).collect(Collectors.toList()));
                     }
                 }
