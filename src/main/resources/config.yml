@@ -28,6 +28,19 @@ tracking-type: 'all'
 github-token: ''
 
 # ========================================== #
+#            Automatic Self-Update             #
+# ========================================== #
+# PluginUpdater-WB can track its own GitHub Releases.
+# The release JAR is downloaded to Paper's update folder;
+# Paper applies it on the next server restart.
+self-update:
+  enabled: true
+  auto-download: true
+  # 0 disables periodic checks. The startup check still runs.
+  check-interval-minutes: 360
+  github-repo: 'Fahry-a/PluginUpdater-WB'
+
+# ========================================== #
 #              Geyser Addons                 #
 # ========================================== #
 # Manages the two Geyser-ecosystem artifacts that cannot be regular plugins.
