@@ -8,7 +8,7 @@ folia-supported: true
 commands:
   updater:
     description: Main command for PluginUpdater-WB
-    usage: /<command> <help|-v|check|run|staged|errors|list|reload|confirm|plugin>
+    usage: /<command> <help|-v|check|self|run|staged|errors|list|reload|confirm|plugin>
     aliases: [upd]
 permissions:
   pluginupdater.admin:
