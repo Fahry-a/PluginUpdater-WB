@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
 
+# Serialize releases on the same branch so multiple pushes cannot run
+# semantic-release concurrently and race on tags/changelog commits.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
