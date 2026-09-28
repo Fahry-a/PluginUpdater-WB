@@ -404,8 +404,10 @@ public class ConfigManager {
      */
     private String resolveMinecraftVersion() {
         String configured = plugin.getConfig().getString("minecraft-version", "");
-        if (configured != null && !configured.isBlank()) return configured.trim();
-        return detectServerMinecraftVersion();
+        if (configured == null || configured.isBlank() || configured.equalsIgnoreCase("auto")) {
+            return detectServerMinecraftVersion();
+        }
+        return configured.trim();
     }
 
     private String detectServerMinecraftVersion() {
