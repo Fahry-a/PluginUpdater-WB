@@ -297,7 +297,7 @@ public class GeyserManager {
     }
 
     private File downloadToTemp(String url, File dest) throws Exception {
-        File tempFile = new File(dest.getParentFile(), dest.getName() + ".download.tmp");
+        File tempFile = new File(dest.getParentFile(), dest.getName() + ".download.jar");
         HttpRequest req = HttpRequest.newBuilder().uri(URI.create(url))
                 .timeout(java.time.Duration.ofSeconds(30))
                 .header("User-Agent", "PluginUpdater-WB").build();
