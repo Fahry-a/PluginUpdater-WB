@@ -68,6 +68,25 @@ public class ConfigManager {
 
         ConfigurationSection pluginsSection = plugin.getPluginsConfig();
 
+        // Geyser is always managed by the normal plugin pipeline, but its source is fixed to Modrinth.
+        // Repair legacy/custom source settings so /upd plugin geyser and /upd check use the same source.
+        org.bukkit.plugin.Plugin loadedGeyser = Bukkit.getPluginManager().getPlugin("Geyser");
+        if (loadedGeyser != null) {
+            ConfigurationSection geyserSection = pluginsSection.getConfigurationSection(loadedGeyser.getName());
+            if (geyserSection == null) {
+                geyserSection = pluginsSection.createSection(loadedGeyser.getName());
+            }
+            geyserSection.set("enabled", true);
+            geyserSection.set("type", "MODRINTH");
+            geyserSection.set("project-id", GEYSER_MODRINTH_ID);
+            geyserSection.set("github-repo", null);
+            geyserSection.set("custom-url", null);
+            if (!geyserSection.contains("allowed-release-types") || geyserSection.getStringList("allowed-release-types").isEmpty()) {
+                geyserSection.set("allowed-release-types", Collections.singletonList("beta"));
+            }
+            geyserSection.set("game-version-filter", false);
+        }
+
         boolean changesMade = false;
         // Floodgate stays out of plugins.yml: its Spigot jar exists on no versioned
         // API (Modrinth bWrNNfkb is Fabric/NeoForge, GitHub has no releases), so it
