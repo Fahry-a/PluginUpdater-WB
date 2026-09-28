@@ -576,6 +576,48 @@ public class UpdateChecker {
         return null;
     }
 
+    /**
+     * Checks only PluginUpdater-WB's official GitHub Releases for a self-update.
+     * This is intentionally separate from the normal plugin scan so /upd self and
+     * the periodic self-check do not depend on other plugin sources.
+     */
+    public void checkSelfUpdate(CommandSender sender, boolean autoDownload) {
+        if (!plugin.getConfig().getBoolean("self-update.enabled", true)) {
+            plugin.sendMsg(sender, ChatColor.YELLOW + "PluginUpdater-WB self-update is disabled.");
+            return;
+        }
+
+        plugin.sendMsg(sender, ChatColor.AQUA + "Checking PluginUpdater-WB GitHub Releases...");
+        plugin.getIoExecutors().checkPool().execute(() -> {
+            try {
+                String current = plugin.getDescription().getVersion();
+                UpdateInfo info = checkGitHub("PluginUpdater-WB", "Fahry-a/PluginUpdater-WB", current,
+                        Collections.singletonList("release"), null);
+                if (info == null || !PluginUpdaterUtils.isNewerThan(current, info.newVersion)) {
+                    plugin.sendMsg(sender, ChatColor.GREEN + "PluginUpdater-WB is up to date (" + current + ").");
+                    return;
+                }
+
+                plugin.sendMsg(sender, ChatColor.YELLOW + "PluginUpdater-WB update available: "
+                        + current + " -> " + info.newVersion);
+                plugin.getPendingUpdates().put(info.pluginName.toLowerCase(Locale.ROOT), info);
+
+                if (autoDownload && plugin.getConfig().getBoolean("self-update.auto-download", true)) {
+                    plugin.sendMsg(sender, ChatColor.AQUA + "Staging the self-update in Paper's update folder...");
+                    Bukkit.getScheduler().runTask(plugin, () ->
+                            plugin.getUpdateDownloader().applyUpdates(sender, Collections.singletonList(info)));
+                } else {
+                    plugin.sendMsg(sender, ChatColor.YELLOW + "Use /upd self update to stage it for the next restart.");
+                }
+            } catch (SourceException e) {
+                plugin.sendMsg(sender, ChatColor.RED + "Self-update check failed: " + e.getMessage());
+            } catch (Exception e) {
+                plugin.sendMsg(sender, ChatColor.RED + "Self-update check failed: "
+                        + (e.getMessage() != null ? e.getMessage() : e));
+            }
+        });
+    }
+
     UpdateInfo checkGitHub(String pluginName, String repo, String currentVer, List<String> allowedTypes) throws Exception {
         return checkGitHub(pluginName, repo, currentVer, allowedTypes, null);
     }
