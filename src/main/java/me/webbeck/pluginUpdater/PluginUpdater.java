@@ -75,6 +75,9 @@ public class PluginUpdater extends JavaPlugin implements Listener {
         getServer().getScheduler().runTaskLater(this, () -> {
             configManager.syncConfig();
             updateChecker.runUpdateCheck(Bukkit.getConsoleSender(), false, null);
+            if (getConfig().getBoolean("self-update.enabled", true)) {
+                updateChecker.checkSelfUpdate(Bukkit.getConsoleSender(), true);
+            }
         }, 1L);
 
         scheduleAutomaticSelfChecks();
