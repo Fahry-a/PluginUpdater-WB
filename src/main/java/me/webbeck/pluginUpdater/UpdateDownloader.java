@@ -379,6 +379,7 @@ public class UpdateDownloader {
             throw new java.io.IOException("could not create download directory");
         }
 
+        final long maxBytes = 128L * 1024L * 1024L;
         String safeFallback = sanitizeFileName(fallbackName);
         Path directoryPath = directory.toPath().toAbsolutePath().normalize();
         Path tempPath = directoryPath.resolve(safeFallback + ".download.tmp").normalize();
@@ -392,21 +393,38 @@ public class UpdateDownloader {
                     .header("User-Agent", "PluginUpdater-WB/26.2")
                     .build();
 
-            java.net.http.HttpResponse<Path> response = plugin.getHttpClient().send(request,
-                    java.net.http.HttpResponse.BodyHandlers.ofFile(tempPath,
-                            StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE));
+            java.net.http.HttpResponse<java.io.InputStream> response = plugin.getHttpClient().send(
+                    request, java.net.http.HttpResponse.BodyHandlers.ofInputStream());
 
             int status = response.statusCode();
             if (status < 200 || status > 299) {
+                response.body().close();
                 throw new java.io.IOException("server returned HTTP " + status);
             }
             if (!"https".equalsIgnoreCase(response.uri().getScheme())) {
+                response.body().close();
                 throw new SecurityException("download redirected to a non-HTTPS URL");
             }
 
             long contentLength = response.headers().firstValueAsLong("Content-Length").orElse(-1L);
-            if (contentLength > 128L * 1024L * 1024L) {
+            if (contentLength > maxBytes) {
+                response.body().close();
                 throw new java.io.IOException("download exceeds the 128 MiB safety limit");
+            }
+
+            try (java.io.InputStream input = response.body();
+                 java.io.OutputStream output = Files.newOutputStream(tempPath,
+                         StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
+                byte[] buffer = new byte[8192];
+                long total = 0L;
+                int read;
+                while ((read = input.read(buffer)) != -1) {
+                    total += read;
+                    if (total > maxBytes) {
+                        throw new java.io.IOException("download exceeds the 128 MiB safety limit");
+                    }
+                    output.write(buffer, 0, read);
+                }
             }
 
             String actualName = sanitizeFileName(extractFileNameFromResponse(response, safeFallback));
@@ -427,7 +445,6 @@ public class UpdateDownloader {
             throw e;
         }
     }
-
     private String extractFileNameFromResponse(java.net.http.HttpResponse<?> response, String fallbackName) {
         var contentDisposition = response.headers().firstValue("Content-Disposition");
         if (contentDisposition.isPresent()) {
