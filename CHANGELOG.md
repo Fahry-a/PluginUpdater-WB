@@ -1,3 +1,12 @@
+## [1.3.1](https://github.com/Fahry-a/PluginUpdater-WB/compare/v1.3.0...v1.3.1) (2026-09-28)
+
+
+### Bug Fixes
+
+* include plugin name and Modrinth ID in fallback log ([15faf6f](https://github.com/Fahry-a/PluginUpdater-WB/commit/15faf6f258712783b24c474a8593ea32bd85c113))
+* make README version bump optional ([af0fc19](https://github.com/Fahry-a/PluginUpdater-WB/commit/af0fc1989f234f5a331e8b6085be61a7612f0c04))
+* support auto Minecraft version detection ([0e259f2](https://github.com/Fahry-a/PluginUpdater-WB/commit/0e259f272e3b70a39cc655f0154d03e84c78f680))
+
 # [1.3.0](https://github.com/Fahry-a/PluginUpdater-WB/compare/v1.2.0...v1.3.0) (2026-09-28)
 
 
