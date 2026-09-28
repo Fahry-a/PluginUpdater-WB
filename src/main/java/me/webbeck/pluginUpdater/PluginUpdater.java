@@ -142,6 +142,10 @@ public class PluginUpdater extends JavaPlugin implements Listener {
         return updateChecker;
     }
 
+    public UpdateDownloader getUpdateDownloader() {
+        return updateDownloader;
+    }
+
     public void sendMsg(org.bukkit.command.CommandSender sender, String msg) {
         Bukkit.getScheduler().runTask(this, () ->
                 sender.sendMessage(LegacyComponentSerializer.legacySection().deserialize(msg))
