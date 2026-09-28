@@ -3,11 +3,12 @@
 # ========================================== #
 
 # The Minecraft version used to query Modrinth.
-# Leave blank to auto-detect from the running server (recommended).
+# Use "auto" (recommended) or leave blank to detect from the running server.
+# Set an explicit version only when you intentionally want to override detection.
 # If the exact version has no builds on Modrinth, the plugin retries without this
 # filter and takes the latest available release, since Paper keeps older builds
 # working through its backwards compatibility layer.
-minecraft-version: ''
+minecraft-version: 'auto'
 
 # List of usernames allowed to use the commands even if they do not have OP or the pluginupdater.admin permission.
 allowed-players:
