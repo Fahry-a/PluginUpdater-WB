@@ -1,17 +1,15 @@
 name: PluginUpdater-WB
 version: ${project.version}
 main: me.webbeck.pluginUpdater.PluginUpdater
-api-version: "26.1"
+api-version: "26.2"
 author: WebBeck
 description: Highly advanced, fully asynchronous plugin manager and updater for Paper.
 folia-supported: true
-
 commands:
   updater:
     description: Main command for PluginUpdater-WB
     usage: /<command> <help|-v|check|run|staged|errors|list|reload|confirm|plugin>
     aliases: [upd]
-
 permissions:
   pluginupdater.admin:
     description: Allows full access to the updater commands.
