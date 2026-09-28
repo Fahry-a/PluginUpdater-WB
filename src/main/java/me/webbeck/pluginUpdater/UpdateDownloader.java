@@ -90,21 +90,19 @@ public class UpdateDownloader {
             CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
                 try {
                     if (runningJar != null) {
-                        try {
-                            String safeBase = sanitizeFileName(info.pluginName);
-                            File backupFile = new File(backupFolder, safeBase + "-" + sanitizeFileName(info.oldVersion) + ".jar");
-                            Files.copy(runningJar.toPath(), backupFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
-
-                            File[] pluginBackups = backupFolder.listFiles((dir, name) ->
-                                    name.startsWith(safeBase + "-") && !name.endsWith("-existing.jar"));
-                            if (pluginBackups != null && pluginBackups.length > 2) {
-                                Arrays.sort(pluginBackups, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
-                                for (int i = 2; i < pluginBackups.length; i++) {
-                                    pluginBackups[i].delete();
-                                }
+                        String safeBase = sanitizeFileName(info.pluginName);
+                        File backupFile = new File(backupFolder, safeBase + "-" + sanitizeFileName(info.oldVersion) + ".jar");
+                        Files.copy(runningJar.toPath(), backupFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                        if (!backupFile.isFile()) {
+                            throw new java.io.IOException("backup was not created");
+                        }
+                        File[] pluginBackups = backupFolder.listFiles((dir, name) ->
+                                name.startsWith(safeBase + "-") && !name.endsWith("-existing.jar"));
+                        if (pluginBackups != null && pluginBackups.length > 3) {
+                            Arrays.sort(pluginBackups, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+                            for (int i = 3; i < pluginBackups.length; i++) {
+                                Files.deleteIfExists(pluginBackups[i].toPath());
                             }
-                        } catch (Exception e) {
-                            plugin.sendMsg(sender, ChatColor.YELLOW + "Could not back up " + info.pluginName + ": " + e.getMessage());
                         }
                     }
 
@@ -282,34 +280,22 @@ public class UpdateDownloader {
      * file was rejected (and deleted). An invalid file is never left in the update folder.
      */
     private String validateStagedJar(CommandSender sender, File downloadedFile, String expectedName, boolean hasClearTarget) {
-        JarInspector.Inspection inspection = JarInspector.inspect(downloadedFile);
-        if (!inspection.valid) {
+        UpdateArtifactValidator.Validation validation =
+                UpdateArtifactValidator.validate(downloadedFile, expectedName, hasClearTarget);
+        if (!validation.valid()) {
             deleteQuietly(downloadedFile);
             plugin.sendMsg(sender, ChatColor.RED + "Rejected " + downloadedFile.getName() + " for " + expectedName
-                    + ": " + inspection.error);
+                    + ": " + validation.error());
             return null;
         }
-        if (!inspection.pluginName.equals(expectedName)) {
-            if (hasClearTarget) {
-                deleteQuietly(downloadedFile);
-                plugin.sendMsg(sender, ChatColor.RED + "Rejected " + downloadedFile.getName()
-                        + ": plugin.yml name '" + inspection.pluginName + "' does not match '" + expectedName + "'.");
-                return null;
-            }
-            plugin.sendMsg(sender, ChatColor.YELLOW + "Warning: " + downloadedFile.getName()
-                    + " reports plugin name '" + inspection.pluginName + "' (expected '" + expectedName + "'). Staged anyway.");
+        if (validation.warning() != null) {
+            plugin.sendMsg(sender, ChatColor.YELLOW + validation.warning());
         }
-        return inspection.pluginName;
+        return validation.pluginName();
     }
 
     private static boolean stagedMatchesRemote(File stagedFile, UpdateInfo info) {
-        if (info.expectedSha1 != null && !info.expectedSha1.isBlank()) {
-            return JarHasher.matchesSha1(stagedFile.toPath(), info.expectedSha1);
-        }
-        if (info.expectedSha256 != null && !info.expectedSha256.isBlank()) {
-            return JarHasher.matchesSha256(stagedFile.toPath(), info.expectedSha256);
-        }
-        return false;
+        return UpdateArtifactValidator.matchesExpectedDigest(stagedFile, info.expectedSha1, info.expectedSha256);
     }
 
     private static String sanitizeFileName(String name) {
@@ -382,42 +368,83 @@ public class UpdateDownloader {
     }
 
     private File downloadFileToDirectory(String downloadUrl, File directory, String fallbackName) throws Exception {
-        if (!directory.exists()) {
-            directory.mkdirs();
+        if (downloadUrl == null || downloadUrl.isBlank()) {
+            throw new IllegalArgumentException("download URL is empty");
+        }
+        java.net.URI uri = java.net.URI.create(downloadUrl);
+        if (!"https".equalsIgnoreCase(uri.getScheme())) {
+            throw new SecurityException("only HTTPS download URLs are allowed");
+        }
+        if (!directory.exists() && !directory.mkdirs() && !directory.isDirectory()) {
+            throw new java.io.IOException("could not create download directory");
         }
 
-        File tempFile = new File(directory, fallbackName + ".download.tmp");
+        final long maxBytes = 128L * 1024L * 1024L;
+        String safeFallback = sanitizeFileName(fallbackName);
+        Path directoryPath = directory.toPath().toAbsolutePath().normalize();
+        Path tempPath = directoryPath.resolve(safeFallback + ".download.tmp").normalize();
+        if (!tempPath.startsWith(directoryPath)) {
+            throw new SecurityException("invalid temporary download path");
+        }
+
         try {
-            java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
-                    .uri(java.net.URI.create(downloadUrl))
-                    .timeout(java.time.Duration.ofSeconds(30))
-                    .header("User-Agent", "PluginUpdater-WB")
+            java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder(uri)
+                    .timeout(java.time.Duration.ofSeconds(60))
+                    .header("User-Agent", "PluginUpdater-WB/26.2")
                     .build();
 
-            java.net.http.HttpResponse<Path> response = plugin.getHttpClient().send(request,
-                    java.net.http.HttpResponse.BodyHandlers.ofFile(tempFile.toPath(),
-                            StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE));
+            java.net.http.HttpResponse<java.io.InputStream> response = plugin.getHttpClient().send(
+                    request, java.net.http.HttpResponse.BodyHandlers.ofInputStream());
 
             int status = response.statusCode();
             if (status < 200 || status > 299) {
+                response.body().close();
                 throw new java.io.IOException("server returned HTTP " + status);
             }
+            if (!"https".equalsIgnoreCase(response.uri().getScheme())) {
+                response.body().close();
+                throw new SecurityException("download redirected to a non-HTTPS URL");
+            }
 
-            String actualName = extractFileNameFromResponse(response, fallbackName);
-            File resultFile = new File(directory, actualName);
-            if (!resultFile.toPath().equals(tempFile.toPath())) {
-                Files.move(tempFile.toPath(), resultFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            long contentLength = response.headers().firstValueAsLong("Content-Length").orElse(-1L);
+            if (contentLength > maxBytes) {
+                response.body().close();
+                throw new java.io.IOException("download exceeds the 128 MiB safety limit");
             }
-            return resultFile;
+
+            try (java.io.InputStream input = response.body();
+                 java.io.OutputStream output = Files.newOutputStream(tempPath,
+                         StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
+                byte[] buffer = new byte[8192];
+                long total = 0L;
+                int read;
+                while ((read = input.read(buffer)) != -1) {
+                    total += read;
+                    if (total > maxBytes) {
+                        throw new java.io.IOException("download exceeds the 128 MiB safety limit");
+                    }
+                    output.write(buffer, 0, read);
+                }
+            }
+
+            String actualName = sanitizeFileName(extractFileNameFromResponse(response, safeFallback));
+            Path resultPath = directoryPath.resolve(actualName).normalize();
+            if (!resultPath.startsWith(directoryPath)) {
+                throw new SecurityException("invalid download filename");
+            }
+            if (!actualName.toLowerCase().endsWith(".jar")) {
+                throw new java.io.IOException("downloaded artifact is not a .jar file");
+            }
+
+            if (!resultPath.equals(tempPath)) {
+                Files.move(tempPath, resultPath, StandardCopyOption.REPLACE_EXISTING);
+            }
+            return resultPath.toFile();
         } catch (Exception e) {
-            try {
-                Files.deleteIfExists(tempFile.toPath());
-            } catch (Exception ignored) {
-            }
+            try { Files.deleteIfExists(tempPath); } catch (Exception ignored) {}
             throw e;
         }
     }
-
     private String extractFileNameFromResponse(java.net.http.HttpResponse<?> response, String fallbackName) {
         var contentDisposition = response.headers().firstValue("Content-Disposition");
         if (contentDisposition.isPresent()) {

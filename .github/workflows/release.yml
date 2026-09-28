@@ -14,12 +14,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
-          # paper-api 26.3 ships Java 25 bytecode (class file 69.0);
-          # JDK 17 cannot even read those classes, let alone compile.
           distribution: temurin
           java-version: '25'
           cache: maven
-      - run: mvn -B test
+      - run: mvn -B -ntp clean verify
 
   release:
     needs: test
@@ -40,7 +38,6 @@ jobs:
           cache: maven
       - uses: actions/setup-node@v4
         with:
-          # semantic-release 25 requires Node ^22.14.0 || >=24.10.0.
           node-version: '24'
           cache: npm
       - run: npm ci
