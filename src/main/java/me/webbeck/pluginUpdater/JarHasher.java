@@ -41,7 +41,7 @@ public final class JarHasher {
     private static final java.util.Map<String, Entry> CACHE =
             new java.util.LinkedHashMap<String, Entry>(64, 0.75f, true) {
                 @Override
-                protected boolean removeEldestEntry(java.util.Map.Entry<String, Entry> eldest) {
+                protected boolean removeEldestEntry(java.util.Map.Entry<String, me.webbeck.pluginUpdater.JarHasher.Entry> eldest) {
                     return size() > MAX_ENTRIES;
                 }
             };
