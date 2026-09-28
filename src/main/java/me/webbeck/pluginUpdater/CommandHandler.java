@@ -61,6 +61,9 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
             case "check":
                 updateChecker.runUpdateCheck(sender, false, null);
                 break;
+            case "self":
+                handleSelfCommand(sender, args);
+                break;
             case "run":
                 if (args.length > 1) {
                     String target = PluginUpdaterUtils.joinArgs(args, 1).toLowerCase();
@@ -114,6 +117,26 @@ public class CommandHandler implements CommandExecutor, TabCompleter {
                 plugin.sendMsg(sender, ChatColor.RED + "Unknown subcommand. Use /upd help");
         }
         return true;
+    }
+
+    private void handleSelfCommand(CommandSender sender, String[] args) {
+        if (args.length == 1 || args[1].equalsIgnoreCase("check")) {
+            updateChecker.checkSelfUpdate(sender, false);
+            return;
+        }
+        if (args[1].equalsIgnoreCase("update")) {
+            updateChecker.checkSelfUpdate(sender, true);
+            return;
+        }
+        if (args[1].equalsIgnoreCase("status")) {
+            plugin.sendMsg(sender, ChatColor.AQUA + "PluginUpdater-WB " + plugin.getDescription().getVersion()
+                    + " | self-update: "
+                    + (plugin.getConfig().getBoolean("self-update.enabled", true) ? "enabled" : "disabled")
+                    + " | auto-download: "
+                    + (plugin.getConfig().getBoolean("self-update.auto-download", true) ? "enabled" : "disabled"));
+            return;
+        }
+        plugin.sendMsg(sender, ChatColor.RED + "Usage: /upd self [check|update|status]");
     }
 
     private void handlePluginSubcommand(CommandSender sender, String[] args) {
