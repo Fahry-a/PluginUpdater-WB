@@ -43,7 +43,7 @@ The exact server and Java requirements are determined by the version of PluginUp
 
 ## Installation
 
-1. Download the latest `PluginUpdater-WB` JAR from the [GitHub Releases](https://github.com/Fahry-a/PluginUpdater-WB/releases) page.
+1. Download the latest `PluginUpdater-WB` JAR from the [GitHub Releases](https://github.com/zalfafa/PluginUpdater-WB/releases) page.
 2. Put the JAR into your server's `plugins/` directory.
 3. Start or restart the server.
 4. PluginUpdater-WB will create its configuration and discover installed plugins.
@@ -440,7 +440,7 @@ PluginUpdater-WB/
 
 ## Support
 
-For bugs or feature requests, open an issue in the [Fahry-a/PluginUpdater-WB](https://github.com/Fahry-a/PluginUpdater-WB) repository.
+For bugs or feature requests, open an issue in the [zalfafa/PluginUpdater-WB](https://github.com/zalfafa/PluginUpdater-WB) repository.
 
 For issues specific to the original upstream project, see [web-beck/PluginUpdater-WB](https://github.com/web-beck/PluginUpdater-WB).
 
@@ -450,7 +450,7 @@ PluginUpdater-WB is based on the original work by [WebBeck](https://github.com/w
 
 - Original project: [web-beck/PluginUpdater-WB](https://github.com/web-beck/PluginUpdater-WB)
 - Original author: **WebBeck**
-- Current fork maintainer: **Fahry-a**
+- Current fork maintainer: **zalfafa**
 
 Changes in this fork include asynchronous update handling, improved source management, Geyser integration, Geyser source locking, addon download fixes, and dedicated self-update support.
 
